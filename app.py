@@ -8,7 +8,6 @@ import io
 # ==========================================================================
 # 🔐 [설정] API 키 (여기에 입력하세요)
 # ==========================================================================
-# 로컬 테스트용 키 입력 (배포 시에는 Streamlit Secrets 사용 권장)
 try:
     MY_API_KEY = st.secrets["GEMINI_API_KEY"]
 except FileNotFoundError:
@@ -21,15 +20,14 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="⚡", layout="wide")
-st.title("⚡ 설문조사 결과 자동 분석기")
-st.markdown("파일을 업로드하면 **시트 선택**부터 **AI 분석**까지 자동으로 수행합니다.")
+st.title("설문조사 결과 자동 분석기")
+st.markdown("파일을 업로드 후 **시트 선택**하시면 **AI 분석**을 자동으로 수행합니다.")
 
 # --------------------------------------------------------------------------
-# 2. 데이터 로더 (시트 분할 지원)
+# 2. 데이터 로더 & 유틸리티
 # --------------------------------------------------------------------------
 def extract_text_from_pdf(file):
     text = ""
-    # 1차 시도: pypdf
     try:
         reader = pypdf.PdfReader(file)
         for page in reader.pages:
@@ -37,7 +35,6 @@ def extract_text_from_pdf(file):
             if t: text += t + "\n"
     except: pass
 
-    # 2차 시도: pdfplumber (텍스트가 적을 경우)
     if len(text) < 50:
         try:
             file.seek(0)
@@ -50,40 +47,31 @@ def extract_text_from_pdf(file):
     return text
 
 def get_file_content(uploaded_file):
-    """파일 형식을 분석하여 적절한 객체를 반환"""
     filename = uploaded_file.name.lower()
     
-    # [Case 1] PDF
     if filename.endswith('.pdf'):
         text = extract_text_from_pdf(uploaded_file)
         if len(text.strip()) < 10: return "PDF_FAIL", None
         return "PDF", text
 
-    # [Case 2] 진짜 엑셀 (시트 여러 개일 수 있음)
     try:
         excel_file = pd.ExcelFile(uploaded_file)
         return "EXCEL_FILE", excel_file
     except: pass
     
     uploaded_file.seek(0)
-    
-    # [Case 3] 가짜 엑셀 (HTML - 표가 여러 개일 수 있음)
     try:
         dfs = pd.read_html(uploaded_file)
         if dfs: return "HTML_LIST", dfs
     except: pass
     
     uploaded_file.seek(0)
-    
-    # [Case 4] CSV (UTF-8)
     try:
         df = pd.read_csv(uploaded_file, encoding='utf-8')
         return "CSV", df
     except: pass
     
     uploaded_file.seek(0)
-    
-    # [Case 5] CSV (CP949)
     try:
         df = pd.read_csv(uploaded_file, encoding='cp949')
         return "CSV", df
@@ -92,19 +80,23 @@ def get_file_content(uploaded_file):
     return None, None
 
 # --------------------------------------------------------------------------
-# 3. AI 분석 엔진 (캐싱 적용으로 속도 최적화)
+# 3. AI 분석 엔진 (캐싱)
 # --------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def run_ai_analysis(prompt):
-    """AI 분석 실행 (결과 캐싱)"""
-    model = genai.GenerativeModel('gemini-1.5-flash') # 가성비 좋은 모델
+    # 모델 자동 감지 로직 포함
     try:
+        model_name = 'gemini-1.5-flash' # 기본값
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
+                model_name = m.name
+                break
+        model = genai.GenerativeModel(model_name)
         res = model.generate_content(prompt)
         return res.text
     except Exception as e:
         return f"AI 분석 오류: {e}"
 
-# 보고서 템플릿 (내부 고정)
 FINAL_TEMPLATE = """
 [교육 운영 결과 보고서]
 
@@ -131,7 +123,6 @@ FINAL_TEMPLATE = """
 def calculate_metrics(df):
     if len(df.columns) < 25: return None
     
-    # 정량 데이터 (G~T열)
     scores = {
         "교육 내용": pd.to_numeric(df.iloc[:, 6:10].stack(), errors='coerce').mean(),
         "강사진": pd.to_numeric(df.iloc[:, 10:13].stack(), errors='coerce').mean(),
@@ -140,7 +131,6 @@ def calculate_metrics(df):
     }
     total = pd.Series(scores.values()).mean()
     
-    # 정성 데이터 (U~Y열)
     t_good = pd.concat([df.iloc[:, 20], df.iloc[:, 21]]).dropna().astype(str).tolist()
     t_bad = pd.concat([df.iloc[:, 22], df.iloc[:, 24]]).dropna().astype(str).tolist()
     t_hope = df.iloc[:, 23].dropna().astype(str).tolist()
@@ -151,9 +141,16 @@ def calculate_metrics(df):
 # 5. 메인 UI 구성
 # --------------------------------------------------------------------------
 with st.sidebar:
-    st.header("📂 파일 설정")
+    st.header("📂 설정 및 실행")
     uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
-    header_row = st.number_input("데이터 시작 행 (보통 5)", value=5, help="표의 헤더(제목)가 있는 행 번호")
+    
+    st.markdown("---")
+    header_row = st.number_input("데이터 시작 행 (Header)", value=5, help="표의 제목(No, 접수일...)이 있는 행 번호")
+    
+    # [변경점 1] 재분석 버튼 추가
+    # 스트림릿은 입력값이 바뀌면 자동 실행되지만, 명시적인 버튼을 원하실 경우 사용
+    if st.button("🔄 설정 적용 및 재분석", type="primary"):
+        st.cache_data.clear() # 캐시를 비워서 강제로 다시 실행하게 함
 
 if uploaded_file:
     # 1. 파일 읽기
@@ -162,57 +159,62 @@ if uploaded_file:
     final_df = None
     pdf_text = None
     
-    # 2. 시트/테이블 선택 로직 (사이드바)
+    # 상태 메시지를 표시할 빈 공간(Placeholder) 생성
+    # 나중에 status_msg.empty()를 호출하면 이 공간의 내용이 사라집니다.
+    status_msg = st.empty()
+
+    # 2. 시트/테이블 선택 및 데이터 준비
     if type_tag == "EXCEL_FILE":
         sheet_names = content.sheet_names
         if len(sheet_names) > 1:
             st.sidebar.markdown("---")
             selected_sheet = st.sidebar.selectbox("📑 시트 선택", sheet_names)
+            status_msg.info(f"⏳ 엑셀 시트: '{selected_sheet}' 데이터 로드 및 분석 중...")
             final_df = content.parse(selected_sheet, header=header_row)
-            st.info(f"엑셀 시트: '{selected_sheet}' 분석 중")
         else:
+            status_msg.info(f"⏳ 엑셀 시트: '{sheet_names[0]}' 데이터 로드 및 분석 중...")
             final_df = content.parse(sheet_names[0], header=header_row)
 
     elif type_tag == "HTML_LIST":
+        status_msg.info("⏳ HTML(가짜 엑셀) 데이터 변환 중...")
         if len(content) > 1:
             st.sidebar.markdown("---")
-            table_idx = st.sidebar.selectbox("📑 테이블(표) 선택", range(len(content)), format_func=lambda x: f"표 {x+1}")
+            table_idx = st.sidebar.selectbox("📑 테이블 선택", range(len(content)), format_func=lambda x: f"표 {x+1}")
             final_df = content[table_idx]
-            # HTML 읽을 때 헤더 처리가 안 되었을 수 있어 다시 정리
-            if header_row > 0:
-                new_header = final_df.iloc[header_row]
-                final_df = final_df[header_row+1:]
-                final_df.columns = new_header
         else:
             final_df = content[0]
-            if header_row > 0:
+        
+        # HTML 헤더 보정
+        if header_row > 0 and final_df is not None:
+            try:
                 new_header = final_df.iloc[header_row]
                 final_df = final_df[header_row+1:]
                 final_df.columns = new_header
+            except: pass
                 
     elif type_tag == "CSV":
-        final_df = pd.read_csv(uploaded_file, header=header_row) # Re-read with correct header for simplicity
+        status_msg.info("⏳ CSV 데이터 분석 중...")
+        final_df = pd.read_csv(uploaded_file, header=header_row)
         
     elif type_tag == "PDF":
+        status_msg.info("⏳ PDF 텍스트 추출 및 AI 독해 중...")
         pdf_text = content
         
     # 3. 분석 및 결과 출력
     if final_df is not None:
-        # [엑셀/CSV 분석 모드]
+        # [엑셀/CSV 분석]
         scores, total, t_good, t_bad, t_hope = calculate_metrics(final_df)
         
         if scores is None:
-            st.error("❌ 데이터 형식이 맞지 않습니다. (열 개수 부족)")
+            status_msg.error("❌ 데이터 형식이 맞지 않습니다. (열 개수 부족)")
             st.warning("사이드바의 '데이터 시작 행'을 조절하거나, 올바른 시트를 선택했는지 확인해주세요.")
         else:
-            # 정량 요약 텍스트 생성
             score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {len(final_df)}명\n   - 세부 점수:\n"
             for k, v in scores.items():
                 val = round(v, 2) if pd.notnull(v) else 0
                 score_summary += f"     · {k}: {val}점\n"
 
-            # AI 분석 (자동 실행)
-            with st.spinner("🤖 AI가 주관식 답변을 분석하고 보고서를 작성 중입니다..."):
+            with st.spinner("🤖 AI가 보고서를 작성하고 있습니다..."):
                 prompt = f"""
                 교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
                 
@@ -238,7 +240,6 @@ if uploaded_file:
                 if MY_API_KEY:
                     ai_res = run_ai_analysis(prompt)
                     
-                    # 결과 파싱
                     parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
                     parts = ai_res.split("---")
                     for p in parts:
@@ -253,14 +254,17 @@ if uploaded_file:
                         종합제언=parsed["PLAN"] if parsed["PLAN"] else "(내용 없음)"
                     )
                     
+                    # [변경점 2] 분석 완료 시 상태 메시지 삭제
+                    status_msg.empty()
+                    
                     st.success("✅ 분석 완료!")
-                    st.text_area("📋 최종 보고서 (복사해서 사용하세요)", value=final_report, height=800)
+                    st.text_area("📋 최종 보고서", value=final_report, height=1000)
                 else:
-                    st.warning("API 키가 없습니다. 코드에 키를 입력해주세요.")
+                    status_msg.warning("API 키가 없습니다.")
 
     elif pdf_text:
-        # [PDF 분석 모드]
-        with st.spinner("📄 AI가 PDF 문서를 독해 중입니다..."):
+        # [PDF 분석]
+        with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
             prompt = f"""
             교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
             
@@ -297,13 +301,16 @@ if uploaded_file:
                     종합제언=parsed["PLAN"]
                 )
                 
+                # [변경점 2] 분석 완료 시 상태 메시지 삭제
+                status_msg.empty()
+                
                 st.success("✅ PDF 분석 완료!")
-                st.text_area("📋 최종 보고서 (복사해서 사용하세요)", value=final_report, height=800)
+                st.text_area("📋 최종 보고서", value=final_report, height=1000)
             else:
-                st.warning("API 키가 없습니다.")
+                status_msg.warning("API 키가 없습니다.")
                 
     elif uploaded_file and final_df is None and pdf_text is None:
-        st.error("파일을 읽지 못했습니다.")
+        status_msg.error("파일을 읽지 못했습니다.")
 
 elif not uploaded_file:
     st.info("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
