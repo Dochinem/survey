@@ -19,9 +19,9 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # --------------------------------------------------------------------------
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="⚡", layout="wide")
-st.title("⚡ 설문조사 결과 자동 분석기 (모아폼 최적화)")
-st.markdown("모아폼 **'all responses'** 데이터를 올리면 불필요한 행을 제거하고 정확히 분석합니다.")
+st.set_page_config(page_title="설문 결과 분석기", page_icon="", layout="wide")
+st.title("설문조사 결과 자동 분석기(모아폼 최적화)")
+st.markdown("모아폼 **'all responses'** 데이터를 올리면 자동으로 처리합니다.")
 
 # --------------------------------------------------------------------------
 # 2. 데이터 로더 & 유틸리티
@@ -117,74 +117,51 @@ FINAL_TEMPLATE = """
 """
 
 # --------------------------------------------------------------------------
-# 4. 엑셀 점수 계산 로직 (모아폼 전용 필터링 추가)
+# 4. 엑셀 점수 계산 로직 (인덱스 보정 완료)
 # --------------------------------------------------------------------------
 def clean_moaform_data(df):
     """
-    모아폼 데이터에서 불필요한 메타데이터 행(1~5, 응답 등)을 제거하는 함수
+    모아폼 데이터 정제: 응답자ID(첫번째 열)가 없는 행 제거
     """
-    # 1. 첫 번째 컬럼(응답자ID)이 비어있거나(NaN), '응답' 같은 텍스트인 행 제거
     if len(df) > 0:
-        # 응답자 ID가 NaN인 행 제거 (보통 메타데이터 행은 ID가 없음)
+        # 첫 번째 컬럼(응답자ID)이 NaN이거나 비어있으면 제거 (메타데이터 행 삭제)
         df = df.dropna(subset=[df.columns[0]])
-        
-        # 혹시 ID열에 숫자가 아닌 텍스트가 섞여 있다면 제거 (헤더가 잘못 읽힌 경우 대비)
-        # (ID는 보통 숫자이거나 고유 코드)
-        
+        # 혹시 '응답자ID'라는 글자가 들어간 헤더 반복 행이 있다면 제거
+        df = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
     return df
 
 def calculate_metrics(df):
-    # 전처리: 불필요한 행 제거
+    # 전처리
     df = clean_moaform_data(df)
     
-    # 데이터가 없으면 종료
     if len(df) == 0: return None
-
-    # 모아폼 all responses 구조 (인덱스 기준)
-    # 8: 교육 내용 유용성 (P3B3)
-    # 9: 정보 정확성 (P3B4)
-    # 10: 난이도 적절성 (P3B5)
-    # 11: 자료 구성 (P3B6)
-    # 12: 강사 전문성 (P4B3)
-    # 13: 강사 전달력 (P4B4)
-    # 14: 강사 태도 (P4B5)
-    # 15: 지식 습득 (P5B3)
-    # 16: 자신감 향상 (P5B4)
-    # 17: 역량 강화 (P5B5)
-    # 18: 자료 충분성 (P5B6)
-    # 19: 시간 배분 (P6B2)
-    # 20: 환경 쾌적성 (P6B3)
-    # 21: 실습 환경 (P6B4)
-    
-    if len(df.columns) < 22: return None # 최소한의 점수 컬럼은 있어야 함
+    if len(df.columns) < 27: return None # 최소 열 개수 확인
     
     try:
-        # 컬럼 인덱스를 사용하여 점수 그룹화
+        # [수정된 매핑: 8번 열이 비어있어서 1칸씩 밀림]
+        # 교육 내용: 9~12열 (4개)
+        # 강사진: 13~15열 (3개)
+        # 성과: 16~18열 (3개)
+        # 운영 환경: 19~22열 (4개)
+        
         scores = {
-            "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 8:12].stack(), errors='coerce').mean(),
-            "강사진 만족도": pd.to_numeric(df.iloc[:, 12:15].stack(), errors='coerce').mean(),
-            "교육 성과": pd.to_numeric(df.iloc[:, 15:18].stack(), errors='coerce').mean(),
-            "교육 환경 및 운영": pd.to_numeric(df.iloc[:, 18:22].stack(), errors='coerce').mean()
+            "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 9:13].stack(), errors='coerce').mean(),
+            "강사진 만족도": pd.to_numeric(df.iloc[:, 13:16].stack(), errors='coerce').mean(),
+            "교육 성과": pd.to_numeric(df.iloc[:, 16:19].stack(), errors='coerce').mean(),
+            "교육 환경 및 운영": pd.to_numeric(df.iloc[:, 19:23].stack(), errors='coerce').mean()
         }
         total = pd.Series(scores.values()).mean()
         
-        # 주관식 컬럼 (인덱스 22부터)
-        # 22: 만족/도움된 점
-        # 23: 추천 이유
-        # 24: 개선 필요 사항
-        # 25: 희망 주제
-        # 26: 운영/환경 개선 (있을 경우)
+        # [수정된 주관식 매핑]
+        # 23: 만족 (가장 만족스럽거나...)
+        # 24: 추천 이유
+        # 25: 개선 필요 사항
+        # 26: 희망 주제
+        # 27: 운영 불편 사항
         
-        # 텍스트 데이터 추출 (NaN 제거)
-        t_good_1 = df.iloc[:, 22].dropna().astype(str).tolist() if len(df.columns) > 22 else []
-        t_good_2 = df.iloc[:, 23].dropna().astype(str).tolist() if len(df.columns) > 23 else []
-        t_good = t_good_1 + t_good_2
-        
-        t_bad_1 = df.iloc[:, 24].dropna().astype(str).tolist() if len(df.columns) > 24 else []
-        t_bad_2 = df.iloc[:, 26].dropna().astype(str).tolist() if len(df.columns) > 26 else []
-        t_bad = t_bad_1 + t_bad_2
-        
-        t_hope = df.iloc[:, 25].dropna().astype(str).tolist() if len(df.columns) > 25 else []
+        t_good = pd.concat([df.iloc[:, 23], df.iloc[:, 24]]).dropna().astype(str).tolist()
+        t_bad = pd.concat([df.iloc[:, 25], df.iloc[:, 27]]).dropna().astype(str).tolist()
+        t_hope = df.iloc[:, 26].dropna().astype(str).tolist()
         
         return scores, total, t_good, t_bad, t_hope, len(df)
     except Exception:
@@ -198,8 +175,8 @@ with st.sidebar:
     uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
     
     st.markdown("---")
-    # [수정] 기본값 1 (모아폼은 2번째 줄이 헤더)
-    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼 파일은 보통 '1'로 설정하면 정확합니다.")
+    # [설정] 모아폼 헤더 위치: 1 (두 번째 줄)
+    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼은 보통 '1'입니다.")
     
     if st.button("🔄 설정 적용 및 재분석", type="primary"):
         st.cache_data.clear()
@@ -214,7 +191,7 @@ if uploaded_file:
     try:
         if type_tag == "EXCEL_FILE":
             sheet_names = content.sheet_names
-            # 'all responses' 우선 선택 로직
+            # 'all responses' 우선 선택
             default_idx = 0
             for i, name in enumerate(sheet_names):
                 if "all response" in name.lower():
@@ -252,16 +229,12 @@ if uploaded_file:
         status_msg.error(f"❌ 읽기 오류: {e}")
         final_df = None
 
-    # ----------------------------------------------------------------------
-    # 분석 및 결과 출력
-    # ----------------------------------------------------------------------
     if final_df is not None:
         result = calculate_metrics(final_df)
         
         if result is None:
             status_msg.error("❌ 데이터 형식이 맞지 않습니다.")
-            st.warning("⚠️ 모아폼 'all responses' 시트가 맞는지 확인해주세요.")
-            st.info("💡 팁: 사이드바의 '데이터 시작 행'을 1로 설정해주세요.")
+            st.warning("⚠️ 'all responses' 시트인지, 주관식 열이 포함되어 있는지 확인해주세요.")
             st.dataframe(final_df.head(3))
         else:
             scores, total, t_good, t_bad, t_hope, count = result
@@ -271,10 +244,10 @@ if uploaded_file:
                 val = round(v, 2) if pd.notnull(v) else 0
                 score_summary += f"     · {k}: {val}점\n"
 
-            with st.spinner("🤖 AI가 보고서를 작성하고 있습니다..."):
+            with st.spinner("AI가 작성하고 있습니다..."):
                 prompt = f"""
                 교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
-                데이터가 부족할 경우, '답변 없음'으로 처리해.
+                데이터가 없거나 부족하면 '특이사항 없음'으로 처리해.
                 
                 [데이터]
                 좋았던점: {str(t_good)[:15000]}
@@ -319,8 +292,8 @@ if uploaded_file:
                     status_msg.warning("API 키가 없습니다.")
 
     elif pdf_text:
-        # (PDF 분석 로직 동일)
-        with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
+        # PDF 로직 (기존 유지)
+        with st.spinner("📄PDF를 분석 중입니다..."):
             prompt = f"""
             교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
             
@@ -361,9 +334,3 @@ if uploaded_file:
                 st.text_area("📋 최종 보고서", value=final_report, height=1000)
             else:
                 status_msg.warning("API 키가 없습니다.")
-                
-    elif uploaded_file and final_df is None and pdf_text is None:
-        pass
-
-elif not uploaded_file:
-    st.info("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
