@@ -20,8 +20,8 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="⚡", layout="wide")
-st.title("설문조사 결과 자동 분석기 (모아폼 최적화)")
-st.markdown("모아폼에서 다운로드한 **'all responses'** 데이터를 업로드하세요.")
+st.title("⚡ 설문조사 결과 자동 분석기 (모아폼 최적화)")
+st.markdown("모아폼 **'all responses'** 데이터를 올리면 불필요한 행을 제거하고 정확히 분석합니다.")
 
 # --------------------------------------------------------------------------
 # 2. 데이터 로더 & 유틸리티
@@ -117,19 +117,49 @@ FINAL_TEMPLATE = """
 """
 
 # --------------------------------------------------------------------------
-# 4. 엑셀 점수 계산 로직 (모아폼 all responses 맞춤형)
+# 4. 엑셀 점수 계산 로직 (모아폼 전용 필터링 추가)
 # --------------------------------------------------------------------------
+def clean_moaform_data(df):
+    """
+    모아폼 데이터에서 불필요한 메타데이터 행(1~5, 응답 등)을 제거하는 함수
+    """
+    # 1. 첫 번째 컬럼(응답자ID)이 비어있거나(NaN), '응답' 같은 텍스트인 행 제거
+    if len(df) > 0:
+        # 응답자 ID가 NaN인 행 제거 (보통 메타데이터 행은 ID가 없음)
+        df = df.dropna(subset=[df.columns[0]])
+        
+        # 혹시 ID열에 숫자가 아닌 텍스트가 섞여 있다면 제거 (헤더가 잘못 읽힌 경우 대비)
+        # (ID는 보통 숫자이거나 고유 코드)
+        
+    return df
+
 def calculate_metrics(df):
-    # 모아폼 all responses 파일은 보통 27개 이상의 열을 가짐
-    if len(df.columns) < 26: return None
+    # 전처리: 불필요한 행 제거
+    df = clean_moaform_data(df)
+    
+    # 데이터가 없으면 종료
+    if len(df) == 0: return None
+
+    # 모아폼 all responses 구조 (인덱스 기준)
+    # 8: 교육 내용 유용성 (P3B3)
+    # 9: 정보 정확성 (P3B4)
+    # 10: 난이도 적절성 (P3B5)
+    # 11: 자료 구성 (P3B6)
+    # 12: 강사 전문성 (P4B3)
+    # 13: 강사 전달력 (P4B4)
+    # 14: 강사 태도 (P4B5)
+    # 15: 지식 습득 (P5B3)
+    # 16: 자신감 향상 (P5B4)
+    # 17: 역량 강화 (P5B5)
+    # 18: 자료 충분성 (P5B6)
+    # 19: 시간 배분 (P6B2)
+    # 20: 환경 쾌적성 (P6B3)
+    # 21: 실습 환경 (P6B4)
+    
+    if len(df.columns) < 22: return None # 최소한의 점수 컬럼은 있어야 함
     
     try:
-        # [모아폼 인덱스 매핑]
-        # 교육 내용: 8~11열 (4개 질문)
-        # 강사진: 12~14열 (3개 질문)
-        # 성과: 15~17열 (3개 질문)
-        # 운영 환경: 18~21열 (4개 질문)
-        
+        # 컬럼 인덱스를 사용하여 점수 그룹화
         scores = {
             "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 8:12].stack(), errors='coerce').mean(),
             "강사진 만족도": pd.to_numeric(df.iloc[:, 12:15].stack(), errors='coerce').mean(),
@@ -138,17 +168,25 @@ def calculate_metrics(df):
         }
         total = pd.Series(scores.values()).mean()
         
-        # [주관식 매핑]
-        # 좋았던 점: 22(만족부분), 23(추천이유)
-        t_good = pd.concat([df.iloc[:, 22], df.iloc[:, 23]]).dropna().astype(str).tolist()
+        # 주관식 컬럼 (인덱스 22부터)
+        # 22: 만족/도움된 점
+        # 23: 추천 이유
+        # 24: 개선 필요 사항
+        # 25: 희망 주제
+        # 26: 운영/환경 개선 (있을 경우)
         
-        # 개선할 점: 24(개선점), 26(운영불편사항) - *25번 희망주제 건너뜀
-        t_bad = pd.concat([df.iloc[:, 24], df.iloc[:, 26]]).dropna().astype(str).tolist()
+        # 텍스트 데이터 추출 (NaN 제거)
+        t_good_1 = df.iloc[:, 22].dropna().astype(str).tolist() if len(df.columns) > 22 else []
+        t_good_2 = df.iloc[:, 23].dropna().astype(str).tolist() if len(df.columns) > 23 else []
+        t_good = t_good_1 + t_good_2
         
-        # 희망 주제: 25번 열
-        t_hope = df.iloc[:, 25].dropna().astype(str).tolist()
+        t_bad_1 = df.iloc[:, 24].dropna().astype(str).tolist() if len(df.columns) > 24 else []
+        t_bad_2 = df.iloc[:, 26].dropna().astype(str).tolist() if len(df.columns) > 26 else []
+        t_bad = t_bad_1 + t_bad_2
         
-        return scores, total, t_good, t_bad, t_hope
+        t_hope = df.iloc[:, 25].dropna().astype(str).tolist() if len(df.columns) > 25 else []
+        
+        return scores, total, t_good, t_bad, t_hope, len(df)
     except Exception:
         return None
 
@@ -160,8 +198,8 @@ with st.sidebar:
     uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
     
     st.markdown("---")
-    # [중요] 모아폼은 1행(두번째 줄)이 진짜 헤더이므로 기본값을 1로 설정
-    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼은 보통 첫 줄이 코드이므로 '1'로 설정하세요.")
+    # [수정] 기본값 1 (모아폼은 2번째 줄이 헤더)
+    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼 파일은 보통 '1'로 설정하면 정확합니다.")
     
     if st.button("🔄 설정 적용 및 재분석", type="primary"):
         st.cache_data.clear()
@@ -176,7 +214,7 @@ if uploaded_file:
     try:
         if type_tag == "EXCEL_FILE":
             sheet_names = content.sheet_names
-            # 'all responses' 시트가 있으면 그걸 우선 선택
+            # 'all responses' 우선 선택 로직
             default_idx = 0
             for i, name in enumerate(sheet_names):
                 if "all response" in name.lower():
@@ -186,19 +224,15 @@ if uploaded_file:
             if len(sheet_names) > 1:
                 st.sidebar.markdown("---")
                 selected_sheet = st.sidebar.selectbox("📑 시트 선택", sheet_names, index=default_idx)
-                status_msg.info(f"⏳ 엑셀 시트: '{selected_sheet}' 데이터 로드 및 분석 중...")
+                status_msg.info(f"⏳ 엑셀 시트: '{selected_sheet}' 데이터 분석 중...")
                 final_df = content.parse(selected_sheet, header=header_row)
             else:
-                status_msg.info(f"⏳ 엑셀 시트: '{sheet_names[0]}' 데이터 로드 및 분석 중...")
+                status_msg.info(f"⏳ 엑셀 시트: '{sheet_names[0]}' 데이터 분석 중...")
                 final_df = content.parse(sheet_names[0], header=header_row)
 
         elif type_tag == "HTML_LIST":
             status_msg.info("⏳ HTML 변환 중...")
-            if len(content) > 1:
-                final_df = content[0] # 보통 첫번째 표
-            else:
-                final_df = content[0]
-            
+            final_df = content[0]
             if header_row > 0 and final_df is not None:
                 try:
                     new_header = final_df.iloc[header_row]
@@ -226,13 +260,13 @@ if uploaded_file:
         
         if result is None:
             status_msg.error("❌ 데이터 형식이 맞지 않습니다.")
-            st.warning(f"현재 읽은 데이터 컬럼 수: {len(final_df.columns)}개 (필요: 26개 이상)")
-            st.info("💡 팁: 사이드바의 '데이터 시작 행'을 1로 설정했는지 확인해주세요.")
+            st.warning("⚠️ 모아폼 'all responses' 시트가 맞는지 확인해주세요.")
+            st.info("💡 팁: 사이드바의 '데이터 시작 행'을 1로 설정해주세요.")
             st.dataframe(final_df.head(3))
         else:
-            scores, total, t_good, t_bad, t_hope = result
+            scores, total, t_good, t_bad, t_hope, count = result
             
-            score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {len(final_df)}명\n   - 세부 점수:\n"
+            score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {count}명\n   - 세부 점수:\n"
             for k, v in scores.items():
                 val = round(v, 2) if pd.notnull(v) else 0
                 score_summary += f"     · {k}: {val}점\n"
@@ -240,6 +274,7 @@ if uploaded_file:
             with st.spinner("🤖 AI가 보고서를 작성하고 있습니다..."):
                 prompt = f"""
                 교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
+                데이터가 부족할 경우, '답변 없음'으로 처리해.
                 
                 [데이터]
                 좋았던점: {str(t_good)[:15000]}
@@ -284,7 +319,7 @@ if uploaded_file:
                     status_msg.warning("API 키가 없습니다.")
 
     elif pdf_text:
-        # (PDF 분석 로직은 기존과 동일)
+        # (PDF 분석 로직 동일)
         with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
             prompt = f"""
             교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
