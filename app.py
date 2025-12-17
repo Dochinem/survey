@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 import pdfplumber
-import pypdf # 강력한 PDF 리더 추가
+import pypdf
 import io
 
 # ==========================================================================
-# 🔐 [설정] Streamlit Secrets 또는 로컬 키 입력
+# 🔐 [설정] API 키 (여기에 입력하세요)
 # ==========================================================================
+# 로컬 테스트용 키 입력 (배포 시에는 Streamlit Secrets 사용 권장)
 try:
     MY_API_KEY = st.secrets["GEMINI_API_KEY"]
 except FileNotFoundError:
@@ -19,260 +20,290 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # --------------------------------------------------------------------------
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="📈", layout="wide")
-st.title("📈 설문조사 결과 분석기")
-st.markdown("다운로드 받은 파일을 업로드하세요.(xlsx 가 제일 정확합니다.)")
+st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="⚡", layout="wide")
+st.title("⚡ 설문조사 결과 자동 분석기")
+st.markdown("파일을 업로드하면 **시트 선택**부터 **AI 분석**까지 자동으로 수행합니다.")
 
 # --------------------------------------------------------------------------
-# 2. 모델 자동 찾기
-# --------------------------------------------------------------------------
-def get_gemini_model_name():
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini' in m.name: return m.name
-    except: pass
-    return 'gemini-1.5-flash'
-
-# --------------------------------------------------------------------------
-# 3. 초강력 데이터 로더 (PDF 2중 엔진 적용)
+# 2. 데이터 로더 (시트 분할 지원)
 # --------------------------------------------------------------------------
 def extract_text_from_pdf(file):
     text = ""
-    
-    # [전략 1] pypdf 사용 (호환성 좋음)
+    # 1차 시도: pypdf
     try:
         reader = pypdf.PdfReader(file)
         for page in reader.pages:
             t = page.extract_text()
             if t: text += t + "\n"
-    except Exception as e:
-        print(f"pypdf 실패: {e}")
+    except: pass
 
-    # [전략 2] 텍스트가 너무 적으면 pdfplumber로 재시도
-    if len(text) < 50: 
+    # 2차 시도: pdfplumber (텍스트가 적을 경우)
+    if len(text) < 50:
         try:
-            file.seek(0) # 파일 포인터 초기화
+            file.seek(0)
             with pdfplumber.open(file) as pdf:
-                text = "" # 리셋
+                text = ""
                 for page in pdf.pages:
                     extract = page.extract_text()
                     if extract: text += extract + "\n"
-        except Exception as e:
-            print(f"pdfplumber 실패: {e}")
-            
+        except: pass
     return text
 
-def load_data_ultimate(uploaded_file, header_row):
+def get_file_content(uploaded_file):
+    """파일 형식을 분석하여 적절한 객체를 반환"""
     filename = uploaded_file.name.lower()
     
-    # [Case 1] PDF 파일
+    # [Case 1] PDF
     if filename.endswith('.pdf'):
-        extracted_text = extract_text_from_pdf(uploaded_file)
-        if len(extracted_text.strip()) < 10:
-            return "PDF_FAIL", None # 텍스트 추출 실패 (이미지일 확률 높음)
-        return "PDF", extracted_text
-    
-    # [Case 2] 엑셀/CSV/HTML 파일
+        text = extract_text_from_pdf(uploaded_file)
+        if len(text.strip()) < 10: return "PDF_FAIL", None
+        return "PDF", text
+
+    # [Case 2] 진짜 엑셀 (시트 여러 개일 수 있음)
     try:
-        df = pd.read_excel(uploaded_file, header=header_row)
-        return "DF", df
+        excel_file = pd.ExcelFile(uploaded_file)
+        return "EXCEL_FILE", excel_file
     except: pass
     
     uploaded_file.seek(0)
+    
+    # [Case 3] 가짜 엑셀 (HTML - 표가 여러 개일 수 있음)
     try:
-        dfs = pd.read_html(uploaded_file, header=header_row)
-        if dfs: return "DF", dfs[0]
+        dfs = pd.read_html(uploaded_file)
+        if dfs: return "HTML_LIST", dfs
     except: pass
     
     uploaded_file.seek(0)
+    
+    # [Case 4] CSV (UTF-8)
     try:
-        df = pd.read_csv(uploaded_file, header=header_row, encoding='utf-8')
-        return "DF", df
+        df = pd.read_csv(uploaded_file, encoding='utf-8')
+        return "CSV", df
     except: pass
     
     uploaded_file.seek(0)
+    
+    # [Case 5] CSV (CP949)
     try:
-        df = pd.read_csv(uploaded_file, header=header_row, encoding='cp949')
-        return "DF", df
+        df = pd.read_csv(uploaded_file, encoding='cp949')
+        return "CSV", df
     except: pass
 
     return None, None
 
 # --------------------------------------------------------------------------
-# 4. 엑셀 분석 로직
+# 3. AI 분석 엔진 (캐싱 적용으로 속도 최적화)
 # --------------------------------------------------------------------------
-def analyze_dataframe(df):
-    if len(df.columns) < 25: return None, None, None, None, None
+@st.cache_data(show_spinner=False)
+def run_ai_analysis(prompt):
+    """AI 분석 실행 (결과 캐싱)"""
+    model = genai.GenerativeModel('gemini-1.5-flash') # 가성비 좋은 모델
+    try:
+        res = model.generate_content(prompt)
+        return res.text
+    except Exception as e:
+        return f"AI 분석 오류: {e}"
+
+# 보고서 템플릿 (내부 고정)
+FINAL_TEMPLATE = """
+[교육 운영 결과 보고서]
+
+1. 정량적 평가 (개요)
+{정량_요약}
+
+2. 정성적 평가 (상세 분석)
+   □ 주요 강점 (만족 요인)
+{좋았던점_요약}
+
+   □ 개선 요청 사항
+{개선점_요약}
+
+   □ 향후 희망 교육 주제
+{희망주제_요약}
+
+3. 종합 제언 (Action Plan)
+{종합제언}
+"""
+
+# --------------------------------------------------------------------------
+# 4. 엑셀 점수 계산 로직
+# --------------------------------------------------------------------------
+def calculate_metrics(df):
+    if len(df.columns) < 25: return None
+    
+    # 정량 데이터 (G~T열)
     scores = {
         "교육 내용": pd.to_numeric(df.iloc[:, 6:10].stack(), errors='coerce').mean(),
         "강사진": pd.to_numeric(df.iloc[:, 10:13].stack(), errors='coerce').mean(),
         "성과": pd.to_numeric(df.iloc[:, 13:16].stack(), errors='coerce').mean(),
         "운영": pd.to_numeric(df.iloc[:, 16:20].stack(), errors='coerce').mean()
     }
-    total_score = pd.Series(scores.values()).mean()
-    txt_good = pd.concat([df.iloc[:, 20], df.iloc[:, 21]]).dropna().astype(str).tolist()
-    txt_bad = pd.concat([df.iloc[:, 22], df.iloc[:, 24]]).dropna().astype(str).tolist()
-    txt_hope = df.iloc[:, 23].dropna().astype(str).tolist()
-    return scores, total_score, txt_good, txt_bad, txt_hope
+    total = pd.Series(scores.values()).mean()
+    
+    # 정성 데이터 (U~Y열)
+    t_good = pd.concat([df.iloc[:, 20], df.iloc[:, 21]]).dropna().astype(str).tolist()
+    t_bad = pd.concat([df.iloc[:, 22], df.iloc[:, 24]]).dropna().astype(str).tolist()
+    t_hope = df.iloc[:, 23].dropna().astype(str).tolist()
+    
+    return scores, total, t_good, t_bad, t_hope
 
 # --------------------------------------------------------------------------
-# 5. 메인 UI
+# 5. 메인 UI 구성
 # --------------------------------------------------------------------------
 with st.sidebar:
-    st.header("📂 파일 업로드")
-    uploaded_file = st.file_uploader("파일", type=['xlsx', 'xls', 'csv', 'html', 'htm', 'pdf'])
-    header_row = st.number_input("데이터 시작 행 (보통 5, 안되면 0)", value=5)
+    st.header("📂 파일 설정")
+    uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
+    header_row = st.number_input("데이터 시작 행 (보통 5)", value=5, help="표의 헤더(제목)가 있는 행 번호")
 
 if uploaded_file:
-    file_type, data = load_data_ultimate(uploaded_file, header_row)
-
-    # [PDF 분석]
-    if file_type == "PDF":
-        pdf_text = data
-        st.info("📄 PDF 텍스트 추출 성공! AI 분석을 준비합니다.")
-        
-        # [디버깅용] 실제로 읽힌 텍스트가 있는지 확인
-        with st.expander("🔍 PDF에서 읽어온 내용 확인하기 (클릭)"):
-            st.text(pdf_text[:1000] + "\n...(생략)...")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.caption("PDF 내용 (AI 입력값)")
-            st.text_area("내용", pdf_text[:800]+"...", height=800)
-        with col2:
-            st.caption("보고서 템플릿")
-            pdf_template = """
-[교육 결과 요약 (PDF 기반)]
-
-1. 총평 및 분위기
-{총평}
-
-2. 주요 통계 (텍스트 추출)
-{통계요약}
-
-3. 주관식 답변 분석
-  - 만족 포인트:
-{만족_요약}
-  - 개선 요청:
-{개선_요약}
-
-4. 종합 제언
-{제언}
-"""
-            template = st.text_area("양식 수정", value=pdf_template, height=800)
-
-        if st.button("🚀 PDF 분석 시작", type="primary"):
-            with st.spinner("AI가 PDF를 읽는 중입니다..."):
-                try:
-                    target_model = get_gemini_model_name()
-                    prompt = f"""
-                    교육 결과 보고서 전문가로서 아래 PDF 텍스트를 분석해줘.
-                    
-                    [PDF 내용]
-                    {pdf_text[:30000]}
-                    
-                    [요청사항]
-                    1. 내용에 포함된 숫자나 통계가 있다면 '통계요약'에 정리해줘.
-                    2. 주관식 의견을 분석해서 만족/개선 포인트로 요약해줘.
-                    
-                    [구분자]
-                    ---MOOD--- (총평)
-                    ---STAT--- (통계요약)
-                    ---GOOD--- (만족)
-                    ---BAD--- (개선)
-                    ---PLAN--- (제언)
-                    """
-                    model = genai.GenerativeModel(target_model)
-                    res = model.generate_content(prompt).text
-                    
-                    parsed = {"MOOD":"", "STAT":"", "GOOD":"", "BAD":"", "PLAN":""}
-                    parts = res.split("---")
-                    for p in parts:
-                        for key in parsed.keys():
-                            if p.startswith(key): parsed[key] = p.replace(key, "").strip()
-                    
-                    final = template.format(
-                        총평=parsed["MOOD"], 통계요약=parsed["STAT"],
-                        만족_요약=parsed["GOOD"], 개선_요약=parsed["BAD"], 제언=parsed["PLAN"]
-                    )
-                    st.subheader("✅ PDF 분석 결과")
-                    st.text_area("결과 복사하기", value=final, height=1000)
-                except Exception as e:
-                    st.error(f"AI 오류: {e}")
+    # 1. 파일 읽기
+    type_tag, content = get_file_content(uploaded_file)
     
-    # [PDF 실패 - 이미지 스캔본일 경우]
-    elif file_type == "PDF_FAIL":
-        st.error("❌ PDF를 읽을 수 없습니다.")
-        st.warning("이 PDF는 텍스트가 아닌 '이미지(스캔본)'로 되어 있는 것 같습니다.")
-        st.info("해결책: 엑셀 파일로 다운로드 받아서 업로드하거나, 텍스트 복사가 가능한 PDF로 변환해주세요.")
+    final_df = None
+    pdf_text = None
+    
+    # 2. 시트/테이블 선택 로직 (사이드바)
+    if type_tag == "EXCEL_FILE":
+        sheet_names = content.sheet_names
+        if len(sheet_names) > 1:
+            st.sidebar.markdown("---")
+            selected_sheet = st.sidebar.selectbox("📑 시트 선택", sheet_names)
+            final_df = content.parse(selected_sheet, header=header_row)
+            st.info(f"엑셀 시트: '{selected_sheet}' 분석 중")
+        else:
+            final_df = content.parse(sheet_names[0], header=header_row)
 
-    # [엑셀 분석]
-    elif file_type == "DF":
-        df = data
-        scores, total, t_good, t_bad, t_hope = analyze_dataframe(df)
+    elif type_tag == "HTML_LIST":
+        if len(content) > 1:
+            st.sidebar.markdown("---")
+            table_idx = st.sidebar.selectbox("📑 테이블(표) 선택", range(len(content)), format_func=lambda x: f"표 {x+1}")
+            final_df = content[table_idx]
+            # HTML 읽을 때 헤더 처리가 안 되었을 수 있어 다시 정리
+            if header_row > 0:
+                new_header = final_df.iloc[header_row]
+                final_df = final_df[header_row+1:]
+                final_df.columns = new_header
+        else:
+            final_df = content[0]
+            if header_row > 0:
+                new_header = final_df.iloc[header_row]
+                final_df = final_df[header_row+1:]
+                final_df.columns = new_header
+                
+    elif type_tag == "CSV":
+        final_df = pd.read_csv(uploaded_file, header=header_row) # Re-read with correct header for simplicity
+        
+    elif type_tag == "PDF":
+        pdf_text = content
+        
+    # 3. 분석 및 결과 출력
+    if final_df is not None:
+        # [엑셀/CSV 분석 모드]
+        scores, total, t_good, t_bad, t_hope = calculate_metrics(final_df)
         
         if scores is None:
-            st.error("❌ 데이터를 읽었으나 형식이 맞지 않습니다.")
-            st.warning(f"읽어온 데이터 컬럼({len(df.columns)}개): {list(df.columns)}")
-            st.info("좌측 사이드바의 '데이터 시작 행'을 0이나 1로 바꿔보세요.")
+            st.error("❌ 데이터 형식이 맞지 않습니다. (열 개수 부족)")
+            st.warning("사이드바의 '데이터 시작 행'을 조절하거나, 올바른 시트를 선택했는지 확인해주세요.")
         else:
-            st.success(f"✅ 데이터 로드 성공! ({len(df)}명)")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("📊 **영역별 점수**")
-                for k, v in scores.items():
-                    val = round(v, 2) if pd.notnull(v) else 0
-                    st.write(f"- {k}: {val}점")
-            with col2:
-                st.metric("종합 만족도", f"{round(total, 2)}점")
+            # 정량 요약 텍스트 생성
+            score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {len(final_df)}명\n   - 세부 점수:\n"
+            for k, v in scores.items():
+                val = round(v, 2) if pd.notnull(v) else 0
+                score_summary += f"     · {k}: {val}점\n"
+
+            # AI 분석 (자동 실행)
+            with st.spinner("🤖 AI가 주관식 답변을 분석하고 보고서를 작성 중입니다..."):
+                prompt = f"""
+                교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
+                
+                [데이터]
+                좋았던점: {str(t_good)[:15000]}
+                개선점: {str(t_bad)[:15000]}
+                희망주제: {str(t_hope)[:15000]}
+                
+                [지침]
+                1. 좋았던 점은 강사, 내용, 환경 등으로 분류하여 핵심 강점 3가지를 요약.
+                2. 개선할 점은 빈도가 높은 순으로 3가지 요약.
+                3. 희망 주제는 3~4개 카테고리로 묶어서 나열.
+                4. 종합 제언은 개선점을 해결할 구체적 대안 2~3가지 제시.
+                5. 말투는 '~함', '~임' 등의 개조식 보고서체.
+                
+                [구분자]
+                ---GOOD--- (좋았던점)
+                ---BAD--- (개선점)
+                ---HOPE--- (희망주제)
+                ---PLAN--- (종합제언)
+                """
+                
+                if MY_API_KEY:
+                    ai_res = run_ai_analysis(prompt)
+                    
+                    # 결과 파싱
+                    parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
+                    parts = ai_res.split("---")
+                    for p in parts:
+                        for k in parsed.keys():
+                            if p.strip().startswith(k): parsed[k] = p.replace(k, "").strip()
+                    
+                    final_report = FINAL_TEMPLATE.format(
+                        정량_요약=score_summary,
+                        좋았던점_요약=parsed["GOOD"] if parsed["GOOD"] else "(내용 없음)",
+                        개선점_요약=parsed["BAD"] if parsed["BAD"] else "(내용 없음)",
+                        희망주제_요약=parsed["HOPE"] if parsed["HOPE"] else "(내용 없음)",
+                        종합제언=parsed["PLAN"] if parsed["PLAN"] else "(내용 없음)"
+                    )
+                    
+                    st.success("✅ 분석 완료!")
+                    st.text_area("📋 최종 보고서 (복사해서 사용하세요)", value=final_report, height=800)
+                else:
+                    st.warning("API 키가 없습니다. 코드에 키를 입력해주세요.")
+
+    elif pdf_text:
+        # [PDF 분석 모드]
+        with st.spinner("📄 AI가 PDF 문서를 독해 중입니다..."):
+            prompt = f"""
+            교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
             
-            st.divider()
-            xls_template = """
-[교육 결과 보고]
-1. 정량 평가 ({인원}명)
-   - 종합: {종합}점
-{점수상세}
-
-2. 정성 평가
-   - 강점: {강점}
-   - 개선: {개선}
-   - 희망주제: {희망}
-
-3. 제언
-{제언}
-""" 
-            template = st.text_area("보고서 양식", value=xls_template, height=800)
+            [PDF 텍스트]
+            {pdf_text[:30000]}
             
-            if st.button("🚀 AI 분석 시작", type="primary"):
-                with st.spinner("AI 분석 중..."):
-                    try:
-                        target_model = get_gemini_model_name()
-                        prompt = f"""
-                        주관식 데이터 분석해줘.
-                        좋았던점: {str(t_good)[:10000]}
-                        개선점: {str(t_bad)[:10000]}
-                        희망주제: {str(t_hope)[:10000]}
-                        
-                        [구분자] ---GOOD---, ---BAD---, ---HOPE---, ---PLAN---
-                        """
-                        model = genai.GenerativeModel(target_model)
-                        res = model.generate_content(prompt).text
-                        
-                        parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
-                        for p in res.split("---"):
-                            for k in parsed.keys():
-                                if p.startswith(k): parsed[k] = p.replace(k, "").strip()
-                        
-                        score_txt = "\n".join([f"   - {k}: {round(v,2)}점" for k,v in scores.items()])
-                        final = template.format(
-                            인원=len(df), 종합=round(total, 2), 점수상세=score_txt,
-                            강점=parsed["GOOD"], 개선=parsed["BAD"], 희망=parsed["HOPE"], 제언=parsed["PLAN"]
-                        )
-                        st.subheader("✅ 분석 결과")
-                        st.text_area("결과 복사하기", value=final, height=1000)
-                    except Exception as e:
-                        st.error(f"오류: {e}")
+            [지침]
+            1. 텍스트에 포함된 수치나 통계가 있다면 '정량_요약'에 정리.
+            2. 주관식 의견을 분석하여 강점/개선점/희망주제로 요약.
+            3. 종합 제언 작성.
+            
+            [구분자]
+            ---STAT--- (통계/정량)
+            ---GOOD--- (강점)
+            ---BAD--- (개선점)
+            ---HOPE--- (희망주제)
+            ---PLAN--- (제언)
+            """
+            
+            if MY_API_KEY:
+                ai_res = run_ai_analysis(prompt)
+                
+                parsed = {"STAT":"", "GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
+                parts = ai_res.split("---")
+                for p in parts:
+                    for k in parsed.keys():
+                        if p.strip().startswith(k): parsed[k] = p.replace(k, "").strip()
+                
+                final_report = FINAL_TEMPLATE.format(
+                    정량_요약=parsed["STAT"],
+                    좋았던점_요약=parsed["GOOD"],
+                    개선점_요약=parsed["BAD"],
+                    희망주제_요약=parsed["HOPE"],
+                    종합제언=parsed["PLAN"]
+                )
+                
+                st.success("✅ PDF 분석 완료!")
+                st.text_area("📋 최종 보고서 (복사해서 사용하세요)", value=final_report, height=800)
+            else:
+                st.warning("API 키가 없습니다.")
+                
+    elif uploaded_file and final_df is None and pdf_text is None:
+        st.error("파일을 읽지 못했습니다.")
 
-    else:
-        st.error("파일을 읽을 수 없습니다.")
+elif not uploaded_file:
+    st.info("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
