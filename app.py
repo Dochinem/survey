@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 import pdfplumber
+import pypdf # 강력한 PDF 리더 추가
 import io
 
 # ==========================================================================
@@ -10,7 +11,6 @@ import io
 try:
     MY_API_KEY = st.secrets["GEMINI_API_KEY"]
 except FileNotFoundError:
-    # 로컬 테스트용 키 입력 (보안을 위해 본인 키를 입력하세요)
     MY_API_KEY = "여기에_API_키를_입력하세요"
 
 if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
@@ -24,67 +24,74 @@ st.title("📈 설문조사 결과 분석기")
 st.markdown("다운로드 받은 파일을 업로드하세요.(xlsx 가 제일 정확합니다.)")
 
 # --------------------------------------------------------------------------
-# 2. 모델 자동 찾기 & 데이터 로더
+# 2. 모델 자동 찾기
 # --------------------------------------------------------------------------
 def get_gemini_model_name():
-    """사용 가능한 Gemini 모델을 자동으로 찾아서 반환"""
     try:
-        # 사용 가능한 모델 목록 조회
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                if 'gemini' in m.name:
-                    return m.name # 예: models/gemini-1.5-flash
-    except:
-        pass
-    # 조회 실패 시 기본값 (가장 확률 높은 것)
+                if 'gemini' in m.name: return m.name
+    except: pass
     return 'gemini-1.5-flash'
 
+# --------------------------------------------------------------------------
+# 3. 초강력 데이터 로더 (PDF 2중 엔진 적용)
+# --------------------------------------------------------------------------
 def extract_text_from_pdf(file):
     text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            extract = page.extract_text()
-            if extract: text += extract + "\n"
+    
+    # [전략 1] pypdf 사용 (호환성 좋음)
+    try:
+        reader = pypdf.PdfReader(file)
+        for page in reader.pages:
+            t = page.extract_text()
+            if t: text += t + "\n"
+    except Exception as e:
+        print(f"pypdf 실패: {e}")
+
+    # [전략 2] 텍스트가 너무 적으면 pdfplumber로 재시도
+    if len(text) < 50: 
+        try:
+            file.seek(0) # 파일 포인터 초기화
+            with pdfplumber.open(file) as pdf:
+                text = "" # 리셋
+                for page in pdf.pages:
+                    extract = page.extract_text()
+                    if extract: text += extract + "\n"
+        except Exception as e:
+            print(f"pdfplumber 실패: {e}")
+            
     return text
 
 def load_data_ultimate(uploaded_file, header_row):
-    """
-    확장자 사기(HTML), 인코딩 문제, PDF까지 모두 처리하는 로더
-    """
     filename = uploaded_file.name.lower()
     
     # [Case 1] PDF 파일
     if filename.endswith('.pdf'):
-        return "PDF", extract_text_from_pdf(uploaded_file)
+        extracted_text = extract_text_from_pdf(uploaded_file)
+        if len(extracted_text.strip()) < 10:
+            return "PDF_FAIL", None # 텍스트 추출 실패 (이미지일 확률 높음)
+        return "PDF", extracted_text
     
     # [Case 2] 엑셀/CSV/HTML 파일
-    # 파일 포인터 초기화를 위해 seek(0)를 반복 사용
-    
-    # 시도 1: 진짜 엑셀 (.xlsx)
     try:
         df = pd.read_excel(uploaded_file, header=header_row)
         return "DF", df
     except: pass
     
     uploaded_file.seek(0)
-    
-    # 시도 2: 가짜 엑셀 (HTML)
     try:
         dfs = pd.read_html(uploaded_file, header=header_row)
         if dfs: return "DF", dfs[0]
     except: pass
     
     uploaded_file.seek(0)
-    
-    # 시도 3: CSV (UTF-8)
     try:
         df = pd.read_csv(uploaded_file, header=header_row, encoding='utf-8')
         return "DF", df
     except: pass
     
     uploaded_file.seek(0)
-    
-    # 시도 4: CSV (EUC-KR / CP949 - 한글 깨짐 방지)
     try:
         df = pd.read_csv(uploaded_file, header=header_row, encoding='cp949')
         return "DF", df
@@ -93,14 +100,10 @@ def load_data_ultimate(uploaded_file, header_row):
     return None, None
 
 # --------------------------------------------------------------------------
-# 3. 엑셀 데이터 분석 로직 (점수 계산)
+# 4. 엑셀 분석 로직
 # --------------------------------------------------------------------------
 def analyze_dataframe(df):
-    # 컬럼 인덱스로 접근 (G=6 ~ Y=24)
-    if len(df.columns) < 25:
-        return None, None, None, None, None
-    
-    # 정량 평가 (숫자로 변환 후 평균)
+    if len(df.columns) < 25: return None, None, None, None, None
     scores = {
         "교육 내용": pd.to_numeric(df.iloc[:, 6:10].stack(), errors='coerce').mean(),
         "강사진": pd.to_numeric(df.iloc[:, 10:13].stack(), errors='coerce').mean(),
@@ -108,36 +111,34 @@ def analyze_dataframe(df):
         "운영": pd.to_numeric(df.iloc[:, 16:20].stack(), errors='coerce').mean()
     }
     total_score = pd.Series(scores.values()).mean()
-    
-    # 정성 평가 (텍스트 합치기)
     txt_good = pd.concat([df.iloc[:, 20], df.iloc[:, 21]]).dropna().astype(str).tolist()
     txt_bad = pd.concat([df.iloc[:, 22], df.iloc[:, 24]]).dropna().astype(str).tolist()
     txt_hope = df.iloc[:, 23].dropna().astype(str).tolist()
-    
     return scores, total_score, txt_good, txt_bad, txt_hope
 
 # --------------------------------------------------------------------------
-# 4. 메인 UI
+# 5. 메인 UI
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.header("📂 파일 업로드")
     uploaded_file = st.file_uploader("파일", type=['xlsx', 'xls', 'csv', 'html', 'htm', 'pdf'])
-    
     header_row = st.number_input("데이터 시작 행 (보통 5, 안되면 0)", value=5)
 
 if uploaded_file:
     file_type, data = load_data_ultimate(uploaded_file, header_row)
 
-    # ----------------------------------------------------------------------
-    # [모드 1] PDF 분석
-    # ----------------------------------------------------------------------
+    # [PDF 분석]
     if file_type == "PDF":
-        st.info("📄 PDF 파일이 감지되었습니다. 텍스트를 분석하여 요약 보고서를 작성합니다.")
         pdf_text = data
+        st.info("📄 PDF 텍스트 추출 성공! AI 분석을 준비합니다.")
         
+        # [디버깅용] 실제로 읽힌 텍스트가 있는지 확인
+        with st.expander("🔍 PDF에서 읽어온 내용 확인하기 (클릭)"):
+            st.text(pdf_text[:1000] + "\n...(생략)...")
+
         col1, col2 = st.columns(2)
         with col1:
-            st.caption("PDF 내용 미리보기")
+            st.caption("PDF 내용 (AI 입력값)")
             st.text_area("내용", pdf_text[:800]+"...", height=800)
         with col2:
             st.caption("보고서 템플릿")
@@ -164,14 +165,12 @@ if uploaded_file:
         if st.button("🚀 PDF 분석 시작", type="primary"):
             with st.spinner("AI가 PDF를 읽는 중입니다..."):
                 try:
-                    # [수정됨] 사용 가능한 모델 자동 감지
                     target_model = get_gemini_model_name()
-                    
                     prompt = f"""
                     교육 결과 보고서 전문가로서 아래 PDF 텍스트를 분석해줘.
                     
                     [PDF 내용]
-                    {pdf_text[:20000]}
+                    {pdf_text[:30000]}
                     
                     [요청사항]
                     1. 내용에 포함된 숫자나 통계가 있다면 '통계요약'에 정리해줘.
@@ -187,7 +186,6 @@ if uploaded_file:
                     model = genai.GenerativeModel(target_model)
                     res = model.generate_content(prompt).text
                     
-                    # 파싱
                     parsed = {"MOOD":"", "STAT":"", "GOOD":"", "BAD":"", "PLAN":""}
                     parts = res.split("---")
                     for p in parts:
@@ -200,13 +198,16 @@ if uploaded_file:
                     )
                     st.subheader("✅ PDF 분석 결과")
                     st.text_area("결과 복사하기", value=final, height=1000)
-                    
                 except Exception as e:
                     st.error(f"AI 오류: {e}")
+    
+    # [PDF 실패 - 이미지 스캔본일 경우]
+    elif file_type == "PDF_FAIL":
+        st.error("❌ PDF를 읽을 수 없습니다.")
+        st.warning("이 PDF는 텍스트가 아닌 '이미지(스캔본)'로 되어 있는 것 같습니다.")
+        st.info("해결책: 엑셀 파일로 다운로드 받아서 업로드하거나, 텍스트 복사가 가능한 PDF로 변환해주세요.")
 
-    # ----------------------------------------------------------------------
-    # [모드 2] 엑셀/CSV/HTML 분석
-    # ----------------------------------------------------------------------
+    # [엑셀 분석]
     elif file_type == "DF":
         df = data
         scores, total, t_good, t_bad, t_hope = analyze_dataframe(df)
@@ -217,8 +218,6 @@ if uploaded_file:
             st.info("좌측 사이드바의 '데이터 시작 행'을 0이나 1로 바꿔보세요.")
         else:
             st.success(f"✅ 데이터 로드 성공! ({len(df)}명)")
-            
-            # 정량 결과 표시
             col1, col2 = st.columns(2)
             with col1:
                 st.write("📊 **영역별 점수**")
@@ -227,8 +226,7 @@ if uploaded_file:
                     st.write(f"- {k}: {val}점")
             with col2:
                 st.metric("종합 만족도", f"{round(total, 2)}점")
-
-            # 정성 분석 (AI)
+            
             st.divider()
             xls_template = """
 [교육 결과 보고]
@@ -249,9 +247,7 @@ if uploaded_file:
             if st.button("🚀 AI 분석 시작", type="primary"):
                 with st.spinner("AI 분석 중..."):
                     try:
-                        # [수정됨] 사용 가능한 모델 자동 감지
                         target_model = get_gemini_model_name()
-
                         prompt = f"""
                         주관식 데이터 분석해줘.
                         좋았던점: {str(t_good)[:10000]}
@@ -269,7 +265,6 @@ if uploaded_file:
                                 if p.startswith(k): parsed[k] = p.replace(k, "").strip()
                         
                         score_txt = "\n".join([f"   - {k}: {round(v,2)}점" for k,v in scores.items()])
-                        
                         final = template.format(
                             인원=len(df), 종합=round(total, 2), 점수상세=score_txt,
                             강점=parsed["GOOD"], 개선=parsed["BAD"], 희망=parsed["HOPE"], 제언=parsed["PLAN"]
