@@ -19,9 +19,9 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # --------------------------------------------------------------------------
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="설문 결과 분석기", page_icon="📈", layout="wide")
+st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="📈", layout="wide")
 st.title("📈 설문조사 결과 분석기")
-st.markdown("다운로드 받은 **'엑셀'이나 PDF를 업로드하세요.")
+st.markdown("다운로드 받은 파일을 업로드하세요.(xlsx 가 제일 정확합니다.)")
 
 # --------------------------------------------------------------------------
 # 2. 초강력 데이터 로더 (핵심 기능)
@@ -55,9 +55,8 @@ def load_data_ultimate(uploaded_file, header_row):
     
     uploaded_file.seek(0)
     
-    # 시도 2: 가짜 엑셀 (HTML) - ★ 질문자님 상황 해결 코드 ★
+    # 시도 2: 가짜 엑셀 (HTML)
     try:
-        # HTML 표를 찾아서 리스트로 반환하므로 첫 번째([0]) 표를 가져옴
         dfs = pd.read_html(uploaded_file, header=header_row)
         if dfs: return "DF", dfs[0]
     except: pass
@@ -85,7 +84,6 @@ def load_data_ultimate(uploaded_file, header_row):
 # --------------------------------------------------------------------------
 def analyze_dataframe(df):
     # 컬럼 인덱스로 접근 (G=6 ~ Y=24)
-    # 에러 방지를 위해 컬럼 수 체크
     if len(df.columns) < 25:
         return None, None, None, None, None
     
@@ -110,9 +108,8 @@ def analyze_dataframe(df):
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.header("📂 파일 업로드")
-    uploaded_file = st.file_uploader("파일 (형식 상관없음)", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
+    uploaded_file = st.file_uploader("파일", type=['xlsx', 'xls', 'csv', 'html', 'htm', 'pdf'])
     
-    # 헤더 위치 조정 (HTML 엑셀은 헤더가 0번일 수도, 5번일 수도 있음)
     header_row = st.number_input("데이터 시작 행 (보통 5, 안되면 0)", value=5)
 
 if uploaded_file:
@@ -128,7 +125,8 @@ if uploaded_file:
         col1, col2 = st.columns(2)
         with col1:
             st.caption("PDF 내용 미리보기")
-            st.text_area("내용", pdf_text[:800]+"...", height=300)
+            # [수정] 높이를 300 -> 800으로 변경
+            st.text_area("내용", pdf_text[:800]+"...", height=800)
         with col2:
             st.caption("보고서 템플릿")
             pdf_template = """
@@ -149,7 +147,8 @@ if uploaded_file:
 4. 종합 제언
 {제언}
 """
-            template = st.text_area("양식 수정", value=pdf_template, height=300)
+            # [수정] 높이를 300 -> 800으로 변경
+            template = st.text_area("양식 수정", value=pdf_template, height=800)
 
         if st.button("🚀 PDF 분석 시작", type="primary"):
             with st.spinner("AI가 PDF를 읽는 중입니다..."):
@@ -171,7 +170,8 @@ if uploaded_file:
                     ---BAD--- (개선)
                     ---PLAN--- (제언)
                     """
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # [수정됨] 모델명을 표준 모델인 'gemini-pro'로 변경
+                    model = genai.GenerativeModel('gemini-pro')
                     res = model.generate_content(prompt).text
                     
                     # 파싱
@@ -186,7 +186,8 @@ if uploaded_file:
                         만족_요약=parsed["GOOD"], 개선_요약=parsed["BAD"], 제언=parsed["PLAN"]
                     )
                     st.subheader("✅ PDF 분석 결과")
-                    st.text_area("결과 복사하기", value=final, height=500)
+                    # [수정] 높이를 500 -> 1000으로 변경
+                    st.text_area("결과 복사하기", value=final, height=1000)
                     
                 except Exception as e:
                     st.error(f"AI 오류: {e}")
@@ -210,7 +211,8 @@ if uploaded_file:
             with col1:
                 st.write("📊 **영역별 점수**")
                 for k, v in scores.items():
-                    st.write(f"- {k}: {round(v, 2)}점")
+                    val = round(v, 2) if pd.notnull(v) else 0
+                    st.write(f"- {k}: {val}점")
             with col2:
                 st.metric("종합 만족도", f"{round(total, 2)}점")
 
@@ -230,7 +232,8 @@ if uploaded_file:
 3. 제언
 {제언}
 """ 
-            template = st.text_area("보고서 양식", value=xls_template, height=300)
+            # [수정] 높이를 300 -> 800으로 변경
+            template = st.text_area("보고서 양식", value=xls_template, height=800)
             
             if st.button("🚀 AI 분석 시작", type="primary"):
                 with st.spinner("AI 분석 중..."):
@@ -243,7 +246,8 @@ if uploaded_file:
                         
                         [구분자] ---GOOD---, ---BAD---, ---HOPE---, ---PLAN---
                         """
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        # [수정됨] 모델명을 표준 모델인 'gemini-pro'로 변경
+                        model = genai.GenerativeModel('gemini-pro')
                         res = model.generate_content(prompt).text
                         
                         parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
@@ -258,7 +262,8 @@ if uploaded_file:
                             강점=parsed["GOOD"], 개선=parsed["BAD"], 희망=parsed["HOPE"], 제언=parsed["PLAN"]
                         )
                         st.subheader("✅ 분석 결과")
-                        st.text_area("결과 복사하기", value=final, height=500)
+                        # [수정] 높이를 500 -> 1000으로 변경
+                        st.text_area("결과 복사하기", value=final, height=1000)
                     except Exception as e:
                         st.error(f"오류: {e}")
 
