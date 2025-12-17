@@ -24,8 +24,21 @@ st.title("📈 설문조사 결과 분석기")
 st.markdown("다운로드 받은 파일을 업로드하세요.(xlsx 가 제일 정확합니다.)")
 
 # --------------------------------------------------------------------------
-# 2. 초강력 데이터 로더 (핵심 기능)
+# 2. 모델 자동 찾기 & 데이터 로더
 # --------------------------------------------------------------------------
+def get_gemini_model_name():
+    """사용 가능한 Gemini 모델을 자동으로 찾아서 반환"""
+    try:
+        # 사용 가능한 모델 목록 조회
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                if 'gemini' in m.name:
+                    return m.name # 예: models/gemini-1.5-flash
+    except:
+        pass
+    # 조회 실패 시 기본값 (가장 확률 높은 것)
+    return 'gemini-1.5-flash'
+
 def extract_text_from_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
@@ -125,7 +138,6 @@ if uploaded_file:
         col1, col2 = st.columns(2)
         with col1:
             st.caption("PDF 내용 미리보기")
-            # [수정] 높이를 300 -> 800으로 변경
             st.text_area("내용", pdf_text[:800]+"...", height=800)
         with col2:
             st.caption("보고서 템플릿")
@@ -147,12 +159,14 @@ if uploaded_file:
 4. 종합 제언
 {제언}
 """
-            # [수정] 높이를 300 -> 800으로 변경
             template = st.text_area("양식 수정", value=pdf_template, height=800)
 
         if st.button("🚀 PDF 분석 시작", type="primary"):
             with st.spinner("AI가 PDF를 읽는 중입니다..."):
                 try:
+                    # [수정됨] 사용 가능한 모델 자동 감지
+                    target_model = get_gemini_model_name()
+                    
                     prompt = f"""
                     교육 결과 보고서 전문가로서 아래 PDF 텍스트를 분석해줘.
                     
@@ -170,8 +184,7 @@ if uploaded_file:
                     ---BAD--- (개선)
                     ---PLAN--- (제언)
                     """
-                    # [수정됨] 모델명을 표준 모델인 'gemini-pro'로 변경
-                    model = genai.GenerativeModel('gemini-pro')
+                    model = genai.GenerativeModel(target_model)
                     res = model.generate_content(prompt).text
                     
                     # 파싱
@@ -186,7 +199,6 @@ if uploaded_file:
                         만족_요약=parsed["GOOD"], 개선_요약=parsed["BAD"], 제언=parsed["PLAN"]
                     )
                     st.subheader("✅ PDF 분석 결과")
-                    # [수정] 높이를 500 -> 1000으로 변경
                     st.text_area("결과 복사하기", value=final, height=1000)
                     
                 except Exception as e:
@@ -232,12 +244,14 @@ if uploaded_file:
 3. 제언
 {제언}
 """ 
-            # [수정] 높이를 300 -> 800으로 변경
             template = st.text_area("보고서 양식", value=xls_template, height=800)
             
             if st.button("🚀 AI 분석 시작", type="primary"):
                 with st.spinner("AI 분석 중..."):
                     try:
+                        # [수정됨] 사용 가능한 모델 자동 감지
+                        target_model = get_gemini_model_name()
+
                         prompt = f"""
                         주관식 데이터 분석해줘.
                         좋았던점: {str(t_good)[:10000]}
@@ -246,8 +260,7 @@ if uploaded_file:
                         
                         [구분자] ---GOOD---, ---BAD---, ---HOPE---, ---PLAN---
                         """
-                        # [수정됨] 모델명을 표준 모델인 'gemini-pro'로 변경
-                        model = genai.GenerativeModel('gemini-pro')
+                        model = genai.GenerativeModel(target_model)
                         res = model.generate_content(prompt).text
                         
                         parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
@@ -262,7 +275,6 @@ if uploaded_file:
                             강점=parsed["GOOD"], 개선=parsed["BAD"], 희망=parsed["HOPE"], 제언=parsed["PLAN"]
                         )
                         st.subheader("✅ 분석 결과")
-                        # [수정] 높이를 500 -> 1000으로 변경
                         st.text_area("결과 복사하기", value=final, height=1000)
                     except Exception as e:
                         st.error(f"오류: {e}")
