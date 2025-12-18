@@ -1,10 +1,10 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import google.generativeai as genai
 import platform
-from matplotlib import font_manager, rc
 
 # --------------------------------------------------------------------------
 # 1. 기본 설정 (한글 폰트 & API 키)
@@ -12,17 +12,12 @@ from matplotlib import font_manager, rc
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
 # 한글 폰트 설정
-try:
-    if platform.system() == 'Windows':
-        font_path = "c:/Windows/Fonts/malgun.ttf"
-        font_name = font_manager.FontProperties(fname=font_path).get_name()
-        rc('font', family=font_name)
-    elif platform.system() == 'Darwin': # Mac
-        rc('font', family='AppleGothic')
-    else:
-        rc('font', family='NanumGothic')
-except Exception:
-    pass
+if platform.system() == 'Windows':
+    plt.rc('font', family='Malgun Gothic')
+elif platform.system() == 'Darwin': # Mac
+    plt.rc('font', family='AppleGothic')
+else:
+    plt.rc('font', family='NanumGothic')
 
 mpl.rcParams['axes.unicode_minus'] = False
 
@@ -76,12 +71,14 @@ open_ended_cols = [
 st.title("📊 교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
 
-uploaded_file = st.file_uploader("엑셀 파일 업로드 (Raw_data.xlsx)", type=['xlsx'])
+# [수정됨] 파일 업로드 글씨 키우기 (Markdown 헤더 사용)
+st.markdown("### 📂 엑셀 파일 업로드 (Raw_data.xlsx)")
+uploaded_file = st.file_uploader("여기를 클릭하여 파일을 선택하세요", type=['xlsx'], label_visibility="collapsed")
 
 if uploaded_file:
     try:
         # header=1 로드
-        df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
+        df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
 
         # ----------------------------------------------------------------------
         # 4. 데이터 전처리 (적격자 필터링)
@@ -94,8 +91,8 @@ if uploaded_file:
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
-        # [수정됨] 전체 숫자는 빼고, 유효 응답자만 깔끔하게 표시
-        st.info(f"✅ **분석 대상 응답자:** 총 {valid_cnt}명")
+        # 유효 응답자만 표시
+        st.info(f"✅ **분석 대상(적격) 응답자:** 총 {valid_cnt}명")
         
         st.markdown("---")
 
@@ -114,25 +111,33 @@ if uploaded_file:
 
         chart_df = pd.DataFrame(list(category_means.items()), columns=['영역', '점수'])
         
-        # [수정됨] figsize=(5, 3)으로 사이즈 대폭 축소
-        fig, ax = plt.subplots(figsize=(5, 3))
+        # 그래프 크기 (가로 4, 세로 2.5)
+        fig, ax = plt.subplots(figsize=(4, 2.5))
         bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2', width=0.5)
         
         for bar in bars:
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+            ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
             
         ax.set_ylim(0, 5.5)
-        ax.set_ylabel("점수", fontsize=9)
-        ax.tick_params(axis='both', labelsize=9)
+        ax.set_ylabel("점수", fontsize=8)
+        ax.tick_params(axis='both', labelsize=8)
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        col_chart, col_data = st.columns([1, 1]) # 비율 조정
+        # 표와 그래프 비율 조정
+        col_chart, col_data = st.columns([1, 1.2]) 
+        
         with col_chart:
             st.pyplot(fig)
+            
         with col_data:
-            st.write("#### 상세 점수")
-            st.dataframe(chart_df, hide_index=True)
+            st.write("#### 상세 점수표")
+            # 숫자 포맷(소수점 2자리) 적용 및 너비 꽉 채우기
+            st.dataframe(
+                chart_df.style.format({"점수": "{:.2f}"}), 
+                use_container_width=True, 
+                hide_index=True
+            )
 
         st.markdown("---")
 
@@ -168,14 +173,15 @@ if uploaded_file:
                     {full_text}
                     """
                     
-                    # [수정됨] 모델명을 'gemini-pro'로 변경 (가장 안정적)
+                    # AI 모델 호출 (gemini-1.5-flash 사용)
                     try:
-                        model = genai.GenerativeModel('gemini-pro')
+                        model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         st.success("분석 완료!")
                         st.markdown(response.text)
                     except Exception as e:
                         st.error(f"AI 분석 오류: {e}")
+                        st.info("Tip: 404 오류가 난다면 터미널에 `pip install -U google-generativeai`를 입력해 업데이트해주세요.")
 
     except Exception as e:
         st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
