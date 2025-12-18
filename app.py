@@ -5,21 +5,29 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import google.generativeai as genai
 import platform
+import io
+import os
+from matplotlib import font_manager, rc
+from fpdf import FPDF
 
 # --------------------------------------------------------------------------
-# 1. 기본 설정 (한글 폰트 & API 키)
+# 1. 기본 설정 (폰트 & API 키)
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# 한글 폰트 설정
-if platform.system() == 'Windows':
-    plt.rc('font', family='Malgun Gothic')
-elif platform.system() == 'Darwin': # Mac
-    plt.rc('font', family='AppleGothic')
-else:
-    plt.rc('font', family='NanumGothic')
+# [중요] 한글 폰트 경로 설정 (윈도우 기준)
+font_path = "C:/Windows/Fonts/malgun.ttf"
 
-mpl.rcParams['axes.unicode_minus'] = False
+# 폰트 파일이 진짜 있는지 확인
+if not os.path.exists(font_path):
+    st.error(f"🚨 폰트 파일을 찾을 수 없습니다: {font_path}")
+    st.info("다른 폰트 경로를 확인하거나, 폰트 파일이 있는지 확인해주세요.")
+    st.stop()
+else:
+    # 1) Matplotlib(차트) 한글 설정
+    font_name = font_manager.FontProperties(fname=font_path).get_name()
+    rc('font', family=font_name)
+    mpl.rcParams['axes.unicode_minus'] = False # 마이너스 깨짐 방지
 
 # API 키 설정
 if "GEMINI_API_KEY" in st.secrets:
@@ -30,7 +38,51 @@ else:
     st.stop()
 
 # --------------------------------------------------------------------------
-# 2. 분석할 문항 정의
+# 2. PDF 생성 함수 (fpdf2 + 한글 폰트 강제 적용)
+# --------------------------------------------------------------------------
+def create_pdf_fpdf2(fig, chart_df, ai_text):
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # 2) PDF 한글 폰트 등록 (필수!)
+    # 'Malgun'이라는 이름으로 폰트 파일을 등록합니다.
+    pdf.add_font("Malgun", fname=font_path)
+    
+    # 제목
+    pdf.set_font("Malgun", size=20)
+    pdf.cell(0, 15, "교육 만족도 분석 리포트", new_x="LMARGIN", new_y="NEXT", align='C')
+    pdf.ln(10)
+
+    # 점수표
+    pdf.set_font("Malgun", size=14)
+    pdf.cell(0, 10, "[영역별 만족도 점수]", new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font("Malgun", size=12)
+    for index, row in chart_df.iterrows():
+        text = f"- {row['영역']}: {row['점수']:.2f}점"
+        pdf.cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(10)
+
+    # 차트 이미지
+    img_buffer = io.BytesIO()
+    fig.savefig(img_buffer, format='png', dpi=100, bbox_inches='tight')
+    img_buffer.seek(0)
+    pdf.image(img_buffer, w=150) 
+    pdf.ln(10)
+
+    # AI 분석 결과
+    pdf.set_font("Malgun", size=14)
+    pdf.cell(0, 10, "[AI 주관식 분석 결과]", new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.set_font("Malgun", size=11)
+    # AI 텍스트 줄바꿈 처리
+    pdf.multi_cell(0, 7, ai_text)
+    
+    return pdf.output(dest='S')
+
+# --------------------------------------------------------------------------
+# 3. 분석 문항 정의
 # --------------------------------------------------------------------------
 categories = {
     "교육 내용 만족도": [
@@ -66,38 +118,30 @@ open_ended_cols = [
 ]
 
 # --------------------------------------------------------------------------
-# 3. 메인 화면 구성 및 파일 업로드
+# 4. 화면 구성
 # --------------------------------------------------------------------------
 st.title("📊 교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
 
-# [수정됨] 파일 업로드 글씨 키우기 (Markdown 헤더 사용)
 st.markdown("### 📂 엑셀 파일 업로드 (Raw_data.xlsx)")
-uploaded_file = st.file_uploader("여기를 클릭하여 파일을 선택하세요", type=['xlsx'], label_visibility="collapsed")
+uploaded_file = st.file_uploader("파일 선택", type=['xlsx'], label_visibility="collapsed")
 
 if uploaded_file:
     try:
-        # header=1 로드
-        df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
+        df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
 
-        # ----------------------------------------------------------------------
-        # 4. 데이터 전처리 (적격자 필터링)
-        # ----------------------------------------------------------------------
         if '답변 적격성' not in df.columns:
-            st.error("🚨 '답변 적격성' 컬럼을 찾을 수 없습니다. 엑셀 형식을 확인하세요.")
+            st.error("🚨 '답변 적격성' 컬럼이 없습니다.")
             st.stop()
 
-        # 공백 제거 후 '적격'만 필터링
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
-        # 유효 응답자만 표시
         st.info(f"✅ **분석 대상(적격) 응답자:** 총 {valid_cnt}명")
-        
         st.markdown("---")
 
         # ----------------------------------------------------------------------
-        # 5. 정량 분석 (점수 계산 및 그래프)
+        # 정량 분석
         # ----------------------------------------------------------------------
         st.subheader("1️⃣ 영역별 만족도 점수 (5점 만점)")
 
@@ -111,7 +155,7 @@ if uploaded_file:
 
         chart_df = pd.DataFrame(list(category_means.items()), columns=['영역', '점수'])
         
-        # 그래프 크기 (가로 4, 세로 2.5)
+        # 차트 그리기
         fig, ax = plt.subplots(figsize=(4, 2.5))
         bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2', width=0.5)
         
@@ -124,31 +168,22 @@ if uploaded_file:
         ax.tick_params(axis='both', labelsize=8)
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        # 표와 그래프 비율 조정
         col_chart, col_data = st.columns([1, 1.2]) 
-        
         with col_chart:
             st.pyplot(fig)
-            
         with col_data:
             st.write("#### 상세 점수표")
-            # 숫자 포맷(소수점 2자리) 적용 및 너비 꽉 채우기
-            st.dataframe(
-                chart_df.style.format({"점수": "{:.2f}"}), 
-                use_container_width=True, 
-                hide_index=True
-            )
+            st.dataframe(chart_df.style.format({"점수": "{:.2f}"}), use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
         # ----------------------------------------------------------------------
-        # 6. 정성 분석 (AI 주관식 분석)
+        # 정성 분석 (AI)
         # ----------------------------------------------------------------------
         st.subheader("2️⃣ 주관식 응답 심층 분석")
         
-        if st.button("🚀분석 실행하기 (클릭)"):
-            with st.spinner("주관식 답변을 읽고 분석 중입니다..."):
-                
+        if st.button("🚀 AI 분석 및 리포트 생성"):
+            with st.spinner("AI가 분석 중입니다..."):
                 full_text = ""
                 for q in open_ended_cols:
                     if q in df_valid.columns:
@@ -157,31 +192,44 @@ if uploaded_file:
                         for a in answers:
                             full_text += f"- {a}\n"
                 
-                if not full_text:
-                    st.warning("분석할 주관식 답변 데이터가 없습니다.")
-                else:
+                ai_result_text = "분석된 내용 없음"
+                if full_text:
                     prompt = f"""
-                    당신은 교육 전문가입니다. 아래 '적격' 응답자들의 주관식 답변을 분석해주세요.
+                    교육 전문가로서 아래 '적격' 응답자들의 주관식 답변을 분석해주세요.
                     
                     형식:
-                    1. 🌟 [핵심 강점]: 참가자들이 만족한 점 3가지 (구체적 이유)
-                    2. 🔧 [개선 필요사항]: 불만이나 개선이 필요한 점 3가지
-                    3. 💡 [희망 교육 주제]: 요청된 주제 리스트
+                    1. 🌟 [핵심 강점]: 만족한 점 3가지
+                    2. 🔧 [개선 필요사항]: 개선 필요한 점 3가지
+                    3. 💡 [희망 교육 주제]: 요청된 주제들
                     4. 📝 [종합 의견]: 한 줄 총평
 
                     --- 데이터 ---
                     {full_text}
                     """
-                    
-                    # AI 모델 호출 (gemini-1.5-flash 사용)
                     try:
+                        # 모델명 수정 (안정적인 버전)
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
+                        ai_result_text = response.text
                         st.success("분석 완료!")
-                        st.markdown(response.text)
+                        st.markdown(ai_result_text)
                     except Exception as e:
                         st.error(f"AI 분석 오류: {e}")
-                        st.info("Tip: 404 오류가 난다면 터미널에 `pip install -U google-generativeai`를 입력해 업데이트해주세요.")
+                        ai_result_text = f"AI 오류: {e}"
+
+            # PDF 다운로드
+            st.markdown("---")
+            with st.spinner("PDF 생성 중..."):
+                try:
+                    pdf_data = create_pdf_fpdf2(fig, chart_df, ai_result_text)
+                    st.download_button(
+                        label="📥 PDF 리포트 다운로드",
+                        data=bytes(pdf_data),
+                        file_name="교육만족도_결과보고서.pdf",
+                        mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.error(f"PDF 생성 오류: {e}")
 
     except Exception as e:
-        st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
+        st.error(f"오류 발생: {e}")
