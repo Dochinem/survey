@@ -14,10 +14,11 @@ from fpdf import FPDF
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
+# NanumGothic.ttf 폰트 로드
 font_filename = "NanumGothic.ttf"
 
 if not os.path.exists(font_filename):
-    st.error(f"Error: '{font_filename}' 파일을 찾을 수 없습니다.")
+    st.error(f"Error: '{font_filename}' 파일을 찾을 수 없습니다. 폴더를 확인해주세요.")
     st.stop()
 else:
     try:
@@ -37,33 +38,34 @@ else:
     st.stop()
 
 # --------------------------------------------------------------------------
-# 2. PDF 생성 함수
+# 2. PDF 생성 함수 (fpdf2)
 # --------------------------------------------------------------------------
 def create_pdf_fpdf2(fig, chart_df, ai_text):
     pdf = FPDF()
     pdf.add_page()
     pdf.add_font("Nanum", fname=font_filename)
     
+    # 제목
     pdf.set_font("Nanum", size=20)
     pdf.cell(0, 15, "교육 만족도 분석 리포트", new_x="LMARGIN", new_y="NEXT", align='C')
     pdf.ln(10)
 
+    # 점수 요약
     pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[영역별 만족도 점수]", new_x="LMARGIN", new_y="NEXT")
-    
     pdf.set_font("Nanum", size=12)
     for index, row in chart_df.iterrows():
-        text = f"- {row['영역']}: {row['점수']:.2f}점"
-        pdf.cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
-    
+        pdf.cell(0, 8, f"- {row['영역']}: {row['점수']:.2f}점", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
 
+    # 차트 이미지 삽입
     img_buffer = io.BytesIO()
     fig.savefig(img_buffer, format='png', dpi=100, bbox_inches='tight')
     img_buffer.seek(0)
     pdf.image(img_buffer, w=150) 
     pdf.ln(10)
 
+    # AI 분석 내용
     pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[AI 주관식 분석 결과]", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Nanum", size=11)
@@ -72,7 +74,7 @@ def create_pdf_fpdf2(fig, chart_df, ai_text):
     return pdf.output(dest='S')
 
 # --------------------------------------------------------------------------
-# 3. 분석 문항 및 메인 로직
+# 3. 데이터 문항 정의
 # --------------------------------------------------------------------------
 categories = {
     "교육 내용 만족도": [
@@ -107,6 +109,9 @@ open_ended_cols = [
     '향후 교육과정에서 추가되기를 희망하는 주제가 있다면 무엇입니까?'
 ]
 
+# --------------------------------------------------------------------------
+# 4. 메인 화면 및 분석 로직
+# --------------------------------------------------------------------------
 st.title("교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
 
@@ -115,8 +120,10 @@ uploaded_file = st.file_uploader("파일 선택", type=['xlsx'], label_visibilit
 
 if uploaded_file:
     try:
+        # 시트 이름 all responses 고정
         df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
+        # 적격자 필터링
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
@@ -148,19 +155,19 @@ if uploaded_file:
         with col_chart:
             st.pyplot(fig)
         with col_data:
-            # [수정] 표 글씨 크기를 26px로 더 키우고 굵게 변경
+            # [시인성 강화] 초대형 표 렌더링 (폰트 26px)
             html_table = f"""
-            <div style="background-color: white; padding: 10px; border-radius: 10px; border: 1px solid #ddd;">
-                <h4 style="text-align: center; color: #333;">상세 점수표</h4>
-                <table style="width: 100%; border-collapse: collapse; font-family: sans-serif;">
+            <div style="background-color: #ffffff; padding: 15px; border-radius: 12px; border: 2px solid #4A90E2; box-shadow: 2px 2px 10px rgba(0,0,0,0.1);">
+                <h3 style="text-align: center; color: #4A90E2; margin-top: 0;">📊 영역별 상세 점수</h3>
+                <table style="width: 100%; border-collapse: collapse;">
                     <thead>
-                        <tr style="background-color: #f8f9fa;">
-                            <th style="padding: 12px; border: 1px solid #dee2e6; font-size: 20px;">영역</th>
-                            <th style="padding: 12px; border: 1px solid #dee2e6; font-size: 20px;">점수</th>
+                        <tr style="background-color: #f1f3f9;">
+                            <th style="padding: 15px; border-bottom: 2px solid #4A90E2; font-size: 22px; text-align: left;">평가 영역</th>
+                            <th style="padding: 15px; border-bottom: 2px solid #4A90E2; font-size: 22px; text-align: center;">평균 점수</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {''.join([f"<tr><td style='padding: 15px; border: 1px solid #dee2e6; font-size: 24px; font-weight: bold;'>{row['영역']}</td><td style='padding: 15px; border: 1px solid #dee2e6; font-size: 24px; font-weight: bold; text-align: center; color: #4A90E2;'>{row['점수']:.2f}</td></tr>" for _, row in chart_df.iterrows()])}
+                        {''.join([f"<tr><td style='padding: 20px; border-bottom: 1px solid #eee; font-size: 26px; font-weight: bold;'>{row['영역']}</td><td style='padding: 20px; border-bottom: 1px solid #eee; font-size: 30px; font-weight: bold; text-align: center; color: #E91E63;'>{row['점수']:.2f}</td></tr>" for _, row in chart_df.iterrows()])}
                     </tbody>
                 </table>
             </div>
@@ -173,7 +180,7 @@ if uploaded_file:
         st.subheader("2. 주관식 응답 심층 분석")
         
         if st.button("AI 분석 및 리포트 생성"):
-            with st.spinner("AI가 분석 중입니다..."):
+            with st.spinner("AI가 데이터를 분석 중입니다..."):
                 full_text = ""
                 for q in open_ended_cols:
                     if q in df_valid.columns:
@@ -186,40 +193,38 @@ if uploaded_file:
                 if full_text:
                     prompt = f"교육 전문가로서 아래 주관식 답변을 [핵심 강점], [개선 필요사항], [희망 교육 주제], [종합 의견]으로 나누어 분석해줘.\n\n{full_text}"
                     
-                    # [핵심 수정] api_version을 v1으로 강제 지정하여 404 에러 원천 차단
+                    # [업데이트 대응] 최신 모델명으로 호출 시도
                     try:
-                        # 최신 라이브러리 방식
-                        model = genai.GenerativeModel(model_name='gemini-1.5-flash')
+                        model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         ai_result_text = response.text
-                        st.success("분석 완료!")
+                        st.success("✅ AI 심층 분석 완료!")
                         st.markdown(ai_result_text)
                     except Exception as e:
-                        # 라이브러리 버전에 따른 두 번째 시도
+                        # 실패 시 백업 모델 사용
                         try:
                             model = genai.GenerativeModel('gemini-pro')
                             response = model.generate_content(prompt)
                             ai_result_text = response.text
-                            st.success("분석 완료!")
+                            st.success("✅ AI 심층 분석 완료 (백업 모델)!")
                             st.markdown(ai_result_text)
                         except Exception as e2:
-                            st.error(f"AI 분석 오류: {e2}")
-                            st.info("💡 해결 방법: 터미널에 'pip install -U google-generativeai'를 입력하여 라이브러리를 업데이트하세요.")
-                            ai_result_text = f"AI 오류: {e2}"
+                            st.error(f"🚨 AI 분석 오류 발생: {e2}")
+                            ai_result_text = f"분석 오류 로그: {e2}"
 
-            # PDF 다운로드
+            # 3. PDF 다운로드 버튼
             st.markdown("---")
-            with st.spinner("PDF 생성 중..."):
+            with st.spinner("PDF 결과서를 생성하고 있습니다..."):
                 try:
                     pdf_data = create_pdf_fpdf2(fig, chart_df, ai_result_text)
                     st.download_button(
-                        label="PDF 리포트 다운로드",
+                        label="📥 PDF 리포트 다운로드",
                         data=bytes(pdf_data),
                         file_name="교육만족도_결과보고서.pdf",
                         mime="application/pdf"
                     )
                 except Exception as e:
-                    st.error(f"PDF 생성 오류: {e}")
+                    st.error(f"🚨 PDF 생성 실패: {e}")
 
     except Exception as e:
-        st.error(f"오류 발생: {e}")
+        st.error(f"🚨 시스템 오류: {e}")
