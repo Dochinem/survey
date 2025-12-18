@@ -4,3 +4,4 @@ google-generativeai
 openpyxl
 matplotlib
 fpdf2
+pip-system-certs
