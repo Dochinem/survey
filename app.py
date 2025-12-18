@@ -3,26 +3,38 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import google.generativeai as genai
+import platform
+from matplotlib import font_manager, rc
 
 # --------------------------------------------------------------------------
 # 1. 기본 설정 (한글 폰트 & API 키)
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# 한글 폰트 설정
-if 'Windows' in plt.get_backend():
-    mpl.rc('font', family='Malgun Gothic')
-else:
-    mpl.rc('font', family='AppleGothic') 
+# [수정됨] 한글 폰트 강제 설정 (Windows/Mac 명확히 구분)
+try:
+    if platform.system() == 'Windows':
+        # 윈도우의 경우 폰트 경로를 직접 지정하여 확실하게 로드
+        font_path = "c:/Windows/Fonts/malgun.ttf"
+        font_name = font_manager.FontProperties(fname=font_path).get_name()
+        rc('font', family=font_name)
+    elif platform.system() == 'Darwin': # Mac
+        rc('font', family='AppleGothic')
+    else:
+        # 리눅스/코랩 등 (나눔고딕 시도)
+        rc('font', family='NanumGothic')
+except Exception:
+    pass
+
 mpl.rcParams['axes.unicode_minus'] = False
 
-# [수정됨] 설정하신 이름(GEMINI_API_KEY)으로 키를 찾도록 변경
+# [확인됨] secrets.toml에 적힌 이름(GEMINI_API_KEY)으로 키를 찾도록 변경
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
 else:
-    st.error("🚨 secrets.toml 파일에서 'GEMINI_API_KEY'를 찾을 수 없습니다.")
-    st.info("Tip: .streamlit/secrets.toml 파일 안에 변수명이 정확히 'GEMINI_API_KEY'인지 확인해주세요.")
+    st.error("🚨 secrets.toml 파일에서 'GEMINI_API_KEY'를 찾지 못했습니다.")
+    st.info("secrets.toml 파일 안에 `GEMINI_API_KEY = '...'` 라고 적혀 있는지 확인해주세요.")
     st.stop()
 
 # --------------------------------------------------------------------------
@@ -72,7 +84,7 @@ uploaded_file = st.file_uploader("엑셀 파일 업로드 (Raw_data.xlsx)", type
 if uploaded_file:
     try:
         # header=1 로드
-        df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
+        df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
         # ----------------------------------------------------------------------
         # 4. 데이터 전처리 (적격자 필터링)
