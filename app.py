@@ -39,21 +39,17 @@ else:
     st.stop()
 
 # --------------------------------------------------------------------------
-# 2. PDF 생성 함수 (fpdf2)
+# 2. PDF 생성 함수
 # --------------------------------------------------------------------------
 def create_pdf_fpdf2(fig, chart_df, ai_text):
     pdf = FPDF()
     pdf.add_page()
-    
-    # 한글 폰트 등록
     pdf.add_font("Nanum", fname=font_filename)
     
-    # 제목
     pdf.set_font("Nanum", size=20)
     pdf.cell(0, 15, "교육 만족도 분석 리포트", new_x="LMARGIN", new_y="NEXT", align='C')
     pdf.ln(10)
 
-    # 점수표
     pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[영역별 만족도 점수]", new_x="LMARGIN", new_y="NEXT")
     
@@ -64,17 +60,14 @@ def create_pdf_fpdf2(fig, chart_df, ai_text):
     
     pdf.ln(10)
 
-    # 차트 이미지
     img_buffer = io.BytesIO()
     fig.savefig(img_buffer, format='png', dpi=100, bbox_inches='tight')
     img_buffer.seek(0)
     pdf.image(img_buffer, w=150) 
     pdf.ln(10)
 
-    # AI 분석 결과
     pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[AI 주관식 분석 결과]", new_x="LMARGIN", new_y="NEXT")
-    
     pdf.set_font("Nanum", size=11)
     pdf.multi_cell(0, 7, ai_text)
     
@@ -117,7 +110,7 @@ open_ended_cols = [
 ]
 
 # --------------------------------------------------------------------------
-# 4. 메인 화면 구성
+# 4. 화면 구성
 # --------------------------------------------------------------------------
 st.title("교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
@@ -127,7 +120,6 @@ uploaded_file = st.file_uploader("파일 선택", type=['xlsx'], label_visibilit
 
 if uploaded_file:
     try:
-        # 시트 이름 all responses
         df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
         if '답변 적격성' not in df.columns:
@@ -140,7 +132,6 @@ if uploaded_file:
         st.info(f"분석 대상(적격) 응답자: 총 {valid_cnt}명")
         st.markdown("---")
 
-        # 정량 분석 (이모지 제거됨)
         st.subheader("1. 영역별 만족도 점수 (5점 만점)")
 
         all_score_cols = [col for cat in categories.values() for col in cat]
@@ -153,7 +144,6 @@ if uploaded_file:
 
         chart_df = pd.DataFrame(list(category_means.items()), columns=['영역', '점수'])
         
-        # 차트 그리기
         fig, ax = plt.subplots(figsize=(4, 2.5))
         bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2', width=0.5)
         
@@ -166,16 +156,17 @@ if uploaded_file:
         ax.tick_params(axis='both', labelsize=8)
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        col_chart, col_data = st.columns([1, 1.2]) 
+        # [수정] 표의 시인성을 위해 컬럼 너비 조정 및 폰트 강조
+        col_chart, col_data = st.columns([1, 1]) 
         with col_chart:
             st.pyplot(fig)
         with col_data:
-            st.write("#### 상세 점수표")
-            st.dataframe(chart_df.style.format({"점수": "{:.2f}"}), use_container_width=True, hide_index=True)
+            st.markdown("#### **상세 점수표**")
+            # 데이터프레임 스타일 적용: 폰트 크기 및 높이 조정
+            st.table(chart_df.assign(점수=chart_df['점수'].map('{:.2f}'.format)))
 
         st.markdown("---")
 
-        # 정성 분석 (AI)
         st.subheader("2. 주관식 응답 심층 분석")
         
         if st.button("AI 분석 및 리포트 생성"):
@@ -191,9 +182,7 @@ if uploaded_file:
                 ai_result_text = "분석된 내용 없음"
                 if full_text:
                     prompt = f"""
-                    교육 전문가로서 아래 '적격' 응답자들의 주관식 답변을 분석해주세요.
-                    
-                    형식:
+                    교육 전문가로서 아래 주관식 답변을 분석해주세요.
                     1. [핵심 강점]: 만족한 점 3가지
                     2. [개선 필요사항]: 개선 필요한 점 3가지
                     3. [희망 교육 주제]: 요청된 주제들
@@ -203,16 +192,25 @@ if uploaded_file:
                     {full_text}
                     """
                     try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        # [수정] 모델 호출 에러 방지용 호환성 코드
+                        # 최신 라이브러리가 아닐 경우를 대비해 'models/' 접두사를 명시하거나 기본 모델 사용
+                        model = genai.GenerativeModel('models/gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         ai_result_text = response.text
                         st.success("분석 완료!")
                         st.markdown(ai_result_text)
                     except Exception as e:
-                        st.error(f"AI 분석 오류: {e}")
-                        ai_result_text = f"AI 오류: {e}"
+                        # 만약 models/ 접두사로도 안되면 일반 이름으로 재시도
+                        try:
+                            model = genai.GenerativeModel('gemini-pro')
+                            response = model.generate_content(prompt)
+                            ai_result_text = response.text
+                            st.success("분석 완료!")
+                            st.markdown(ai_result_text)
+                        except Exception as e2:
+                            st.error(f"AI 분석 오류: {e2}")
+                            ai_result_text = f"AI 오류: {e2}"
 
-            # PDF 다운로드
             st.markdown("---")
             with st.spinner("PDF 생성 중..."):
                 try:
