@@ -1,324 +1,247 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import google.generativeai as genai
-import pdfplumber
-import pypdf
-import io
+from fpdf import FPDF
+import os
 
-# ==========================================================================
-# 🔐 [설정] API 키
-# ==========================================================================
+# -----------------------------------------------------------------------------
+# 1. 설문 구조 및 기본 설정
+# -----------------------------------------------------------------------------
+st.set_page_config(layout="wide", page_title="교육 결과 분석 리포트")
+
+# 객관식 질문 (점수화)
+category_config = {
+    "교육 내용 및 구성": [
+        "교육 내용이 현재 또는 향후 업무에 유용하다고 생각하십니까?",
+        "제공된 정보가 정확하고 최신 내용으로 구성되어 있었습니까?",
+        "교육 내용의 난이도가 적절했다고 생각하십니까?",
+        "교육 자료의 구성 및 체계가 논리적이고 이해하기 쉬웠습니까?"
+    ],
+    "강사진 만족도": [
+        "강사는 교육 주제에 대한 충분한 전문 지식을 갖추고 있었습니까?",
+        "강사의 전달 방식(말투, 속도, 태도)은 이해하기 쉬웠습니까?",
+        "강사는 질문에 성실하게 답변하고 학습자의 참여를 유도했습니까?"
+    ],
+    "교육 성과 및 효과": [
+        "이번 교육을 통해 새로운 지식이나 기술을 습득할 수 있었습니까?",
+        "교육 후, 관련 업무 수행에 대한 자신감이 향상되었습니까?",
+        "교육에서 배운 내용이 학업/실무 역량 강화에 도움이 되었습니까?"
+    ],
+    "교육 운영 및 시설/환경": [
+        "교육 자료(교재 등)는 충분하고 활용도가 높았습니까?",
+        "실습 진행을 위한 장비, 재료 및 환경이 충분하고 만족스러웠습니까?",
+        "교육 시간은 적절했다고 생각하십니까?",
+        "교육 장소의 환경이 쾌적했습니까?"
+    ]
+}
+
+# 주관식 질문 (서술형)
+essay_questions = [
+    "이번 교육을 통해 얻은 것 중 가장 만족스럽거나 도움이 되었던 부분(강의, 실습, 자료 등)은 무엇이며, 그 이유는 무엇입니까?",
+    "이번 교육을 다른 동료/지인에게 추천하고 싶다면, 그 이유는 무엇입니까?",
+    "교육 내용, 강의 방식, 실습 구성 등에서 추가가 필요하다고 생각하는 구체적인 부분이 있다면 무엇입니까?",
+    "교육 장소, 실습 장비, 교육 자료 제공 등 교육 운영 및 환경 측면에서 불편하거나 개선이 필요했던 사항이 있다면 구체적으로 적어주십시오.",
+    "향후 교육과정에 추가되기를 희망하는 주제가 있다면 무엇입니까?"
+]
+
+# -----------------------------------------------------------------------------
+# 2. 기능 함수 정의 (AI 요약 & PDF)
+# -----------------------------------------------------------------------------
+
+def analyze_with_ai(api_key, text_data):
+    """AI를 사용하여 서술형 응답을 요약합니다."""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""
+        당신은 교육 만족도 분석 전문가입니다. 아래는 수강생들의 서술형 피드백입니다.
+        이 내용들을 분석하여 다음 3가지를 정리해주세요:
+        1. 긍정적 피드백 요약 (핵심 강점)
+        2. 개선 필요 사항 요약 (주요 불만)
+        3. 향후 교육을 위한 제언
+        
+        [수강생 피드백 데이터]
+        {text_data}
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"AI 분석 중 오류 발생: {str(e)}"
+
+def create_pdf(report_data, ai_summary):
+    """결과 리포트 PDF를 생성합니다."""
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # 한글 폰트 설정 (같은 폴더에 폰트 파일이 있어야 함)
+    font_path = 'NanumGothic.ttf'
+    
+    if os.path.exists(font_path):
+        pdf.add_font('NanumGothic', '', font_path, uni=True)
+        pdf.set_font('NanumGothic', '', 12)
+    else:
+        pdf.set_font('Arial', '', 12)
+        pdf.cell(200, 10, txt="Warning: Korean font not found.", ln=True)
+
+    pdf.cell(200, 10, txt="[ 교육 만족도 결과 보고서 ]", ln=True, align='C')
+    pdf.ln(10)
+    
+    # 1. 정량적 통계
+    pdf.cell(200, 10, txt=f"총 참여 인원: {report_data['count']}명", ln=True)
+    pdf.cell(200, 10, txt=f"종합 만족도: {report_data['total_avg']:.2f}점", ln=True)
+    pdf.ln(10)
+    
+    pdf.cell(200, 10, txt="< 카테고리별 평균 점수 >", ln=True)
+    for cat, score in report_data['cat_scores'].items():
+        pdf.cell(200, 10, txt=f"- {cat}: {score:.2f}점", ln=True)
+    
+    pdf.ln(10)
+    
+    # 2. 요약 내용
+    if ai_summary:
+        pdf.cell(200, 10, txt="<서술형 응답>", ln=True)
+        pdf.multi_cell(0, 8, txt=ai_summary)
+
+    return pdf.output(dest='S').encode('latin-1')
+
+# -----------------------------------------------------------------------------
+# 3. 사이드바 (설정)
+# -----------------------------------------------------------------------------
+st.sidebar.title("⚙️ 설정")
+uploaded_file = st.sidebar.file_uploader("엑셀 파일 업로드", type=['xlsx'])
+
+# [수정됨] Secrets에서 API Key 가져오기
 try:
-    MY_API_KEY = st.secrets["GEMINI_API_KEY"]
-except FileNotFoundError:
-    MY_API_KEY = "여기에_API_키를_입력하세요"
+    # secrets.toml 파일에 GEMINI_API_KEY = "sk-..." 형식으로 저장되어 있어야 함
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    api_key = None
+    st.sidebar.error("Secrets에서 'GEMINI_API_KEY'를 찾을 수 없습니다.")
 
-if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
-    genai.configure(api_key=MY_API_KEY)
+# -----------------------------------------------------------------------------
+# 4. 메인 화면 로직
+# -----------------------------------------------------------------------------
+st.title("📊 교육 결과 대시보드")
 
-# --------------------------------------------------------------------------
-# 1. 페이지 설정
-# --------------------------------------------------------------------------
-st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="", layout="wide")
-st.title("설문조사 결과 자동 분석기")
-st.markdown("파일을 업로드하면 모아폼 데이터를 분석합니다.")
-
-# --------------------------------------------------------------------------
-# 2. 데이터 로더
-# --------------------------------------------------------------------------
-def extract_text_from_pdf(file):
-    text = ""
-    try:
-        reader = pypdf.PdfReader(file)
-        for page in reader.pages:
-            t = page.extract_text()
-            if t: text += t + "\n"
-    except: pass
-    if len(text) < 50:
-        try:
-            file.seek(0)
-            with pdfplumber.open(file) as pdf:
-                text = ""
-                for page in pdf.pages:
-                    extract = page.extract_text()
-                    if extract: text += extract + "\n"
-        except: pass
-    return text
-
-def get_file_content(uploaded_file):
-    filename = uploaded_file.name.lower()
-    if filename.endswith('.pdf'):
-        text = extract_text_from_pdf(uploaded_file)
-        if len(text.strip()) < 10: return "PDF_FAIL", None
-        return "PDF", text
-    try:
-        excel_file = pd.ExcelFile(uploaded_file)
-        return "EXCEL_FILE", excel_file
-    except: pass
-    uploaded_file.seek(0)
-    try:
-        dfs = pd.read_html(uploaded_file)
-        if dfs: return "HTML_LIST", dfs
-    except: pass
-    uploaded_file.seek(0)
-    try:
-        df = pd.read_csv(uploaded_file, encoding='utf-8')
-        return "CSV", df
-    except: pass
-    uploaded_file.seek(0)
-    try:
-        df = pd.read_csv(uploaded_file, encoding='cp949')
-        return "CSV", df
-    except: pass
-    return None, None
-
-# --------------------------------------------------------------------------
-# 3. AI 분석 엔진
-# --------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def run_ai_analysis(prompt):
-    try:
-        model_name = 'gemini-1.5-flash'
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
-                model_name = m.name
-                break
-        model = genai.GenerativeModel(model_name)
-        res = model.generate_content(prompt)
-        return res.text
-    except Exception as e:
-        return f"AI 분석 오류: {e}"
-
-FINAL_TEMPLATE = """
-[교육 운영 결과 보고서]
-
-1. 정량적 평가 (개요)
-{정량_요약}
-
-2. 정성적 평가 (상세 분석)
-   □ 주요 강점 (만족 요인)
-{좋았던점_요약}
-
-   □ 개선 요청 사항
-{개선점_요약}
-
-   □ 향후 희망 교육 주제
-{희망주제_요약}
-
-3. 종합 제언 (Action Plan)
-{종합제언}
-"""
-
-# --------------------------------------------------------------------------
-# 4. 데이터 정제 및 계산
-# --------------------------------------------------------------------------
-def clean_moaform_data(df):
-    if len(df) > 0:
-        # 1열(응답자ID)이 숫자인 행만 남김
-        df = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
-    return df
-
-def calculate_metrics(df):
-    df = clean_moaform_data(df)
+if uploaded_file is not None:
+    # 데이터 로드
+    df = pd.read_excel(uploaded_file, sheet_name='all response')
     
-    if len(df) == 0: return None
-    if len(df.columns) < 28: return None
+    # -- [통계 계산] --
+    total_count = len(df)
+    all_numeric_cols = [q for cats in category_config.values() for q in cats if q in df.columns]
     
-    try:
-        # 정량 평가 (J열=9부터)
-        scores = {
-            "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 9:13].stack(), errors='coerce').mean(),
-            "강사진 만족도": pd.to_numeric(df.iloc[:, 13:16].stack(), errors='coerce').mean(),
-            "교육 성과": pd.to_numeric(df.iloc[:, 16:20].stack(), errors='coerce').mean(),
-            "교육 환경 및 운영": pd.to_numeric(df.iloc[:, 20:23].stack(), errors='coerce').mean()
-        }
-        total = pd.Series(scores.values()).mean()
-        
-        # 주관식 데이터 추출
-        def get_clean_text_list(series_list):
-            combined = pd.concat(series_list)
-            # 공백/NaN 제외하고 리스트로 반환
-            return [x.strip() for x in combined.dropna().astype(str) if x.strip() != ""]
+    if all_numeric_cols:
+        total_avg = df[all_numeric_cols].mean(numeric_only=True).mean()
+    else:
+        total_avg = 0
 
-        # 좋았던 점: X(23), Y(24)
-        t_good = get_clean_text_list([df.iloc[:, 23], df.iloc[:, 24]])
-        
-        # 개선할 점: Z(25), AA(26)
-        t_bad = get_clean_text_list([df.iloc[:, 25], df.iloc[:, 26]])
-        
-        # 희망 주제: AB(27)
-        t_hope = get_clean_text_list([df.iloc[:, 27]])
-        
-        return scores, total, t_good, t_bad, t_hope, len(df)
-    except Exception:
-        return None
+    # 상단 요약 배너
+    st.markdown(f"""
+        <div style='background-color:#e8f4f8; padding: 20px; border-radius: 10px; margin-bottom: 20px; display:flex; justify-content:space-around;'>
+            <div><span style='font-size:1.1em; color:gray;'>총 참여</span><br><span style='font-size:1.8em; font-weight:bold;'>{total_count}명</span></div>
+            <div><span style='font-size:1.1em; color:gray;'>종합 점수</span><br><span style='font-size:1.8em; font-weight:bold; color:#0068c9;'>{total_avg:.2f}점</span></div>
+        </div>
+        """, unsafe_allow_html=True)
 
-# --------------------------------------------------------------------------
-# 5. 메인 UI
-# --------------------------------------------------------------------------
-with st.sidebar:
-    st.header("📂 설정 및 실행")
-    uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
+    # -- [객관식 상세 (가로 배치)] --
+    cols = st.columns(len(category_config))
+    cat_scores = {}
+
+    for i, (cat_name, questions) in enumerate(category_config.items()):
+        with cols[i]:
+            st.subheader(cat_name)
+            st.markdown("---")
+            scores = []
+            for q in questions:
+                if q in df.columns:
+                    val = df[q].mean()
+                    scores.append(val)
+                    # 질문(작게) - 점수(크게)
+                    c1, c2 = st.columns([4, 1])
+                    c1.caption(q)
+                    c2.markdown(f"**{val:.1f}**")
+            
+            # 카테고리 평균
+            if scores:
+                avg = np.mean(scores)
+                cat_scores[cat_name] = avg
+                st.markdown("---")
+                st.metric(f"{cat_name} 평균", f"{avg:.2f}")
+
     st.markdown("---")
-    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼 파일은 '1'로 설정하세요.")
-    
-    if st.button("🔄 설정 적용 및 재분석", type="primary"):
-        st.cache_data.clear()
 
-if uploaded_file:
-    type_tag, content = get_file_content(uploaded_file)
-    final_df = None
-    pdf_text = None
-    status_msg = st.empty()
+    # -- [AI 분석 및 서술형 데이터] --
+    st.header("📝 서술형 응답")
 
-    try:
-        if type_tag == "EXCEL_FILE":
-            sheet_names = content.sheet_names
-            default_idx = 0
-            for i, name in enumerate(sheet_names):
-                if "all response" in name.lower():
-                    default_idx = i
-                    break
-            if len(sheet_names) > 1:
-                st.sidebar.markdown("---")
-                selected_sheet = st.sidebar.selectbox("📑 시트 선택", sheet_names, index=default_idx)
-                status_msg.info(f"⏳ 엑셀 시트: '{selected_sheet}' 분석 중...")
-                final_df = content.parse(selected_sheet, header=header_row)
-            else:
-                status_msg.info(f"⏳ 엑셀 시트: '{sheet_names[0]}' 분석 중...")
-                final_df = content.parse(sheet_names[0], header=header_row)
-        elif type_tag == "HTML_LIST":
-            final_df = content[0]
-            if header_row > 0 and final_df is not None:
-                try:
-                    new_header = final_df.iloc[header_row]
-                    final_df = final_df[header_row+1:]
-                    final_df.columns = new_header
-                except: pass
-        elif type_tag == "CSV":
-            final_df = pd.read_csv(uploaded_file, header=header_row)
-        elif type_tag == "PDF":
-            pdf_text = content
-    except Exception as e:
-        status_msg.error(f"❌ 읽기 오류: {e}")
-        final_df = None
+    all_essay_text = ""
+    for q in essay_questions:
+        if q in df.columns:
+            valid_texts = df[q].dropna().astype(str).tolist()
+            if valid_texts:
+                all_essay_text += f"\n[질문: {q}]\n" + "\n".join(valid_texts)
 
-    if final_df is not None:
-        result = calculate_metrics(final_df)
-        
-        if result is None:
-            status_msg.error("❌ 데이터 구조 오류")
-            st.warning("J열~AB열 확인 필요.")
-        else:
-            scores, total, t_good, t_bad, t_hope, count = result
-            
-            score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {count}명\n   - 세부 점수:\n"
-            for k, v in scores.items():
-                val = round(v, 2) if pd.notnull(v) else 0
-                score_summary += f"     · {k}: {val}점\n"
-
-            with st.spinner("보고서를 작성하고 있습니다..."):
-                txt_good = "\n".join([f"- {x}" for x in t_good]) if t_good else "(없음)"
-                txt_bad = "\n".join([f"- {x}" for x in t_bad]) if t_bad else "(없음)"
-                txt_hope = "\n".join([f"- {x}" for x in t_hope]) if t_hope else "(없음)"
-
-                prompt = f"""
-                교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
-                
-                [데이터]
-                1. 좋았던 점:
-                {txt_good}
-                
-                2. 개선할 점:
-                {txt_bad}
-                
-                3. 희망 교육 주제:
-                {txt_hope}
-                
-                [작성 지침]
-                1. 좋았던 점, 개선할 점, 희망 주제를 각각 3가지씩 핵심 요약.
-                2. 종합 제언은 구체적 대안 2~3가지 제시.
-                3. 말투는 '~함'체 사용.
-                
-                [구분자]
-                ###GOOD
-                (좋았던 점 내용)
-                ###BAD
-                (개선할 점 내용)
-                ###HOPE
-                (희망 주제 내용)
-                ###PLAN
-                (종합 제언 내용)
-                """
-                
-                if MY_API_KEY:
-                    ai_res = run_ai_analysis(prompt)
-                    
-                    parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
-                    parts = ai_res.split("###")
-                    for p in parts:
-                        p = p.strip()
-                        if p.startswith("GOOD"): parsed["GOOD"] = p.replace("GOOD", "").strip()
-                        elif p.startswith("BAD"): parsed["BAD"] = p.replace("BAD", "").strip()
-                        elif p.startswith("HOPE"): parsed["HOPE"] = p.replace("HOPE", "").strip()
-                        elif p.startswith("PLAN"): parsed["PLAN"] = p.replace("PLAN", "").strip()
-                    
-                    final_report = FINAL_TEMPLATE.format(
-                        정량_요약=score_summary,
-                        좋았던점_요약=parsed["GOOD"] if parsed["GOOD"] else "(내용 없음)",
-                        개선점_요약=parsed["BAD"] if parsed["BAD"] else "(내용 없음)",
-                        희망주제_요약=parsed["HOPE"] if parsed["HOPE"] else "(내용 없음)",
-                        종합제언=parsed["PLAN"] if parsed["PLAN"] else "(내용 없음)"
-                    )
-                    
-                    status_msg.empty()
-                    st.success("✅ 분석 완료!")
-                    st.text_area("📋 최종 보고서", value=final_report, height=1000)
+    # AI 분석 버튼
+    ai_result_text = ""
+    if api_key:
+        if st.button("서술형 응답 요약 & 분석"):
+            with st.spinner("응답을 분석 중입니다..."):
+                if all_essay_text:
+                    ai_result_text = analyze_with_ai(api_key, all_essay_text)
+                    st.success("분석 완료!")
+                    st.markdown(f"<div style='background-color:#f0f2f6; padding:15px; border-radius:5px;'>{ai_result_text}</div>", unsafe_allow_html=True)
                 else:
-                    status_msg.warning("API 키가 없습니다.")
+                    st.warning("분석할 서술형 응답 데이터가 없습니다.")
+    else:
+        st.warning("API Key가 설정되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
 
-    elif pdf_text:
-        with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
-            prompt = f"""
-            교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
-            
-            [PDF 텍스트]
-            {pdf_text[:30000]}
-            
-            [구분자]
-            ###STAT
-            ###GOOD
-            ###BAD
-            ###HOPE
-            ###PLAN
-            """
-            
-            if MY_API_KEY:
-                ai_res = run_ai_analysis(prompt)
-                parsed = {"STAT":"", "GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
-                parts = ai_res.split("###")
-                for p in parts:
-                    p = p.strip()
-                    if p.startswith("STAT"): parsed["STAT"] = p.replace("STAT", "").strip()
-                    elif p.startswith("GOOD"): parsed["GOOD"] = p.replace("GOOD", "").strip()
-                    elif p.startswith("BAD"): parsed["BAD"] = p.replace("BAD", "").strip()
-                    elif p.startswith("HOPE"): parsed["HOPE"] = p.replace("HOPE", "").strip()
-                    elif p.startswith("PLAN"): parsed["PLAN"] = p.replace("PLAN", "").strip()
-                
-                final_report = FINAL_TEMPLATE.format(
-                    정량_요약=parsed["STAT"],
-                    좋았던점_요약=parsed["GOOD"],
-                    개선점_요약=parsed["BAD"],
-                    희망주제_요약=parsed["HOPE"],
-                    종합제언=parsed["PLAN"]
-                )
-                
-                status_msg.empty()
-                st.success("✅ PDF 분석 완료!")
-                st.text_area("📋 최종 보고서", value=final_report, height=1000)
+    # 서술형 테이블 보여주기 (빈 값도 포함)
+    st.subheader("응답 원본 데이터")
+    for q in essay_questions:
+        with st.expander(f"Q. {q}"):
+            if q in df.columns:
+                # NaN을 빈 문자열로 대체하여 빈칸으로 표시
+                view_df = df[[q]].fillna("")
+                st.dataframe(view_df, use_container_width=True)
             else:
-                status_msg.warning("API 키가 없습니다.")
-    elif uploaded_file and final_df is None and pdf_text is None:
-        pass
-elif not uploaded_file:
-    st.info("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
+                st.write("데이터 없음")
+
+    # -- [PDF 다운로드] --
+    st.markdown("---")
+    st.subheader("💾 보고서 다운로드")
+    
+    c_down1, c_down2 = st.columns(2)
+    
+    # 1. 시각화 보고서 (브라우저 인쇄)
+    with c_down1:
+        st.info("💡 **차트가 포함된 시각화 보고서**는 브라우저의 인쇄 기능을 사용하세요.")
+        st.markdown("""
+            <button onclick="window.print()" style="background-color:#FF4B4B; color:white; border:none; padding:10px 20px; border-radius:5px; cursor:pointer;">
+                🖨️ 현재 화면 인쇄 (PDF 저장)
+            </button>
+            """, unsafe_allow_html=True)
+
+    # 2. 텍스트 보고서 (AI 요약 포함)
+    with c_down2:
+        if os.path.exists('NanumGothic.ttf'):
+            if st.button("📄 분석 결과 PDF 다운로드"):
+                report_data = {
+                    'count': total_count,
+                    'total_avg': total_avg,
+                    'cat_scores': cat_scores
+                }
+                pdf_bytes = create_pdf(report_data, ai_result_text if ai_result_text else "AI 분석 내용 없음")
+                
+                st.download_button(
+                    label="📥 PDF 파일 받기",
+                    data=pdf_bytes,
+                    file_name="교육결과보고서.pdf",
+                    mime="application/pdf"
+                )
+        else:
+            st.warning("⚠️ PDF 생성: 'NanumGothic.ttf' 폰트 파일이 필요합니다.")
+
+else:
+    st.info("왼쪽 사이드바에서 엑셀 파일을 업로드해주세요.")
