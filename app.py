@@ -19,12 +19,12 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # --------------------------------------------------------------------------
 # 1. 페이지 설정
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="설문 결과 분석기", page_icon="", layout="wide")
-st.title("설문조사 결과 자동 분석기(모아폼 최적화)")
-st.markdown("모아폼 **'all responses'** 데이터를 올리면 자동으로 처리합니다.")
+st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="⚡", layout="wide")
+st.title("⚡ 설문조사 결과 자동 분석기 (모아폼 정밀판)")
+st.markdown("모아폼 **'all responses'** 데이터를 올리면 J열부터 정확하게 분석합니다.")
 
 # --------------------------------------------------------------------------
-# 2. 데이터 로더 & 유틸리티
+# 2. 데이터 로더
 # --------------------------------------------------------------------------
 def extract_text_from_pdf(file):
     text = ""
@@ -34,7 +34,6 @@ def extract_text_from_pdf(file):
             t = page.extract_text()
             if t: text += t + "\n"
     except: pass
-
     if len(text) < 50:
         try:
             file.seek(0)
@@ -48,35 +47,29 @@ def extract_text_from_pdf(file):
 
 def get_file_content(uploaded_file):
     filename = uploaded_file.name.lower()
-    
     if filename.endswith('.pdf'):
         text = extract_text_from_pdf(uploaded_file)
         if len(text.strip()) < 10: return "PDF_FAIL", None
         return "PDF", text
-
     try:
         excel_file = pd.ExcelFile(uploaded_file)
         return "EXCEL_FILE", excel_file
     except: pass
-    
     uploaded_file.seek(0)
     try:
         dfs = pd.read_html(uploaded_file)
         if dfs: return "HTML_LIST", dfs
     except: pass
-    
     uploaded_file.seek(0)
     try:
         df = pd.read_csv(uploaded_file, encoding='utf-8')
         return "CSV", df
     except: pass
-    
     uploaded_file.seek(0)
     try:
         df = pd.read_csv(uploaded_file, encoding='cp949')
         return "CSV", df
     except: pass
-
     return None, None
 
 # --------------------------------------------------------------------------
@@ -117,50 +110,50 @@ FINAL_TEMPLATE = """
 """
 
 # --------------------------------------------------------------------------
-# 4. 엑셀 점수 계산 로직 (인덱스 보정 완료)
+# 4. 데이터 정제 및 계산 (사용자 요청 반영)
 # --------------------------------------------------------------------------
 def clean_moaform_data(df):
     """
-    모아폼 데이터 정제: 응답자ID(첫번째 열)가 없는 행 제거
+    모아폼 데이터 정제:
+    - 4행부터 데이터가 시작되므로, 앞부분(질문, 타입설명 등)을 제거합니다.
+    - '응답자ID' 열이 숫자인 행만 남깁니다.
     """
     if len(df) > 0:
-        # 첫 번째 컬럼(응답자ID)이 NaN이거나 비어있으면 제거 (메타데이터 행 삭제)
-        df = df.dropna(subset=[df.columns[0]])
-        # 혹시 '응답자ID'라는 글자가 들어간 헤더 반복 행이 있다면 제거
+        # 1열(응답자ID)이 숫자로 변환 가능한 행만 진짜 데이터로 간주
         df = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
     return df
 
 def calculate_metrics(df):
-    # 전처리
+    # 전처리 (불필요한 행 제거)
     df = clean_moaform_data(df)
     
     if len(df) == 0: return None
-    if len(df.columns) < 27: return None # 최소 열 개수 확인
+    # X~AB까지 읽어야 하므로 최소 28개 열 필요 (A=0 ... AB=27)
+    if len(df.columns) < 28: return None
     
     try:
-        # [수정된 매핑: 8번 열이 비어있어서 1칸씩 밀림]
-        # 교육 내용: 9~12열 (4개)
-        # 강사진: 13~15열 (3개)
-        # 성과: 16~18열 (3개)
-        # 운영 환경: 19~22열 (4개)
+        # [점수 매핑]
+        # 교육 내용: J(9), K(10), L(11), M(12) -> 4개
+        # 강사진: N(13), O(14), P(15) -> 3개
+        # 교육 성과: Q(16), R(17), S(18), T(19) -> 4개
+        # 교육 환경: U(20), V(21), W(22) -> 3개
         
         scores = {
             "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 9:13].stack(), errors='coerce').mean(),
             "강사진 만족도": pd.to_numeric(df.iloc[:, 13:16].stack(), errors='coerce').mean(),
-            "교육 성과": pd.to_numeric(df.iloc[:, 16:19].stack(), errors='coerce').mean(),
-            "교육 환경 및 운영": pd.to_numeric(df.iloc[:, 19:23].stack(), errors='coerce').mean()
+            "교육 성과": pd.to_numeric(df.iloc[:, 16:20].stack(), errors='coerce').mean(),
+            "교육 환경 및 운영": pd.to_numeric(df.iloc[:, 20:23].stack(), errors='coerce').mean()
         }
         total = pd.Series(scores.values()).mean()
         
-        # [수정된 주관식 매핑]
-        # 23: 만족 (가장 만족스럽거나...)
-        # 24: 추천 이유
-        # 25: 개선 필요 사항
-        # 26: 희망 주제
-        # 27: 운영 불편 사항
-        
+        # [주관식 매핑]
+        # 좋았던 점: X(23), Y(24)
         t_good = pd.concat([df.iloc[:, 23], df.iloc[:, 24]]).dropna().astype(str).tolist()
+        
+        # 개선할 점: Z(25), AB(27) (AA 건너뜀)
         t_bad = pd.concat([df.iloc[:, 25], df.iloc[:, 27]]).dropna().astype(str).tolist()
+        
+        # 희망 주제: AA(26) (이게 그동안 빠져있었습니다!)
         t_hope = df.iloc[:, 26].dropna().astype(str).tolist()
         
         return scores, total, t_good, t_bad, t_hope, len(df)
@@ -168,15 +161,15 @@ def calculate_metrics(df):
         return None
 
 # --------------------------------------------------------------------------
-# 5. 메인 UI 구성
+# 5. 메인 UI
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.header("📂 설정 및 실행")
     uploaded_file = st.file_uploader("파일 업로드", type=['xlsx', 'xls', 'csv', 'html', 'pdf'])
     
     st.markdown("---")
-    # [설정] 모아폼 헤더 위치: 1 (두 번째 줄)
-    header_row = st.number_input("데이터 시작 행 (Header)", value=1, help="모아폼은 보통 '1'입니다.")
+    # [설정] 기본값 0 (J1, K1 등 첫 줄부터 코드가 있으므로 0번 행을 헤더로 읽어야 함)
+    header_row = st.number_input("데이터 시작 행 (Header)", value=0, help="모아폼 파일은 '0'으로 설정해야 J1, K1 등의 코드를 정확히 읽습니다.")
     
     if st.button("🔄 설정 적용 및 재분석", type="primary"):
         st.cache_data.clear()
@@ -191,7 +184,6 @@ if uploaded_file:
     try:
         if type_tag == "EXCEL_FILE":
             sheet_names = content.sheet_names
-            # 'all responses' 우선 선택
             default_idx = 0
             for i, name in enumerate(sheet_names):
                 if "all response" in name.lower():
@@ -233,8 +225,8 @@ if uploaded_file:
         result = calculate_metrics(final_df)
         
         if result is None:
-            status_msg.error("❌ 데이터 형식이 맞지 않습니다.")
-            st.warning("⚠️ 'all responses' 시트인지, 주관식 열이 포함되어 있는지 확인해주세요.")
+            status_msg.error("❌ 데이터 구조가 맞지 않습니다.")
+            st.warning("⚠️ J열~AB열까지 데이터가 있는지, 'all responses' 시트가 맞는지 확인해주세요.")
             st.dataframe(final_df.head(3))
         else:
             scores, total, t_good, t_bad, t_hope, count = result
@@ -244,15 +236,15 @@ if uploaded_file:
                 val = round(v, 2) if pd.notnull(v) else 0
                 score_summary += f"     · {k}: {val}점\n"
 
-            with st.spinner("AI가 작성하고 있습니다..."):
+            with st.spinner("🤖 AI가 보고서를 작성하고 있습니다..."):
                 prompt = f"""
                 교육 결과 보고서 전문가로서 아래 주관식 데이터를 분석해줘.
-                데이터가 없거나 부족하면 '특이사항 없음'으로 처리해.
+                데이터가 없으면 '특이사항 없음'으로 처리해.
                 
                 [데이터]
-                좋았던점: {str(t_good)[:15000]}
-                개선점: {str(t_bad)[:15000]}
-                희망주제: {str(t_hope)[:15000]}
+                좋았던점 (X,Y열): {str(t_good)[:15000]}
+                개선점 (Z,AB열): {str(t_bad)[:15000]}
+                희망주제 (AA열): {str(t_hope)[:15000]}
                 
                 [지침]
                 1. 좋았던 점은 강사, 내용, 환경 등으로 분류하여 핵심 강점 3가지를 요약.
@@ -292,8 +284,8 @@ if uploaded_file:
                     status_msg.warning("API 키가 없습니다.")
 
     elif pdf_text:
-        # PDF 로직 (기존 유지)
-        with st.spinner("📄PDF를 분석 중입니다..."):
+        # PDF 처리 (기존 동일)
+        with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
             prompt = f"""
             교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
             
@@ -334,3 +326,8 @@ if uploaded_file:
                 st.text_area("📋 최종 보고서", value=final_report, height=1000)
             else:
                 status_msg.warning("API 키가 없습니다.")
+    elif uploaded_file and final_df is None and pdf_text is None:
+        pass
+
+elif not uploaded_file:
+    st.info("👈 왼쪽 사이드바에서 파일을 업로드해주세요.")
