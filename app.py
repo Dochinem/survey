@@ -21,7 +21,7 @@ if MY_API_KEY and not MY_API_KEY.startswith("여기에"):
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문 결과 통합 분석기", page_icon="", layout="wide")
 st.title("설문조사 결과 자동 분석기")
-st.markdown("모아폼 데이터를 올리면 분석하여 내용을 정리해드립니다.")
+st.markdown("파일을 업로드하면 모아폼 데이터를 분석합니다.")
 
 # --------------------------------------------------------------------------
 # 2. 데이터 로더
@@ -78,7 +78,6 @@ def get_file_content(uploaded_file):
 @st.cache_data(show_spinner=False)
 def run_ai_analysis(prompt):
     try:
-        # 모델 자동 감지
         model_name = 'gemini-1.5-flash'
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods and 'gemini' in m.name:
@@ -115,7 +114,7 @@ FINAL_TEMPLATE = """
 # --------------------------------------------------------------------------
 def clean_moaform_data(df):
     if len(df) > 0:
-        # 1열(응답자ID)이 숫자인 행만 남김 (헤더/메타데이터 제거)
+        # 1열(응답자ID)이 숫자인 행만 남김
         df = df[pd.to_numeric(df.iloc[:, 0], errors='coerce').notnull()]
     return df
 
@@ -126,7 +125,7 @@ def calculate_metrics(df):
     if len(df.columns) < 28: return None
     
     try:
-        # 정량 평가
+        # 정량 평가 (J열=9부터)
         scores = {
             "교육 내용 및 구성": pd.to_numeric(df.iloc[:, 9:13].stack(), errors='coerce').mean(),
             "강사진 만족도": pd.to_numeric(df.iloc[:, 13:16].stack(), errors='coerce').mean(),
@@ -135,10 +134,10 @@ def calculate_metrics(df):
         }
         total = pd.Series(scores.values()).mean()
         
-        # 주관식 데이터 추출 함수
+        # 주관식 데이터 추출
         def get_clean_text_list(series_list):
             combined = pd.concat(series_list)
-            # NaN 제거, 공백 제거, 빈 문자열 제외
+            # 공백/NaN 제외하고 리스트로 반환
             return [x.strip() for x in combined.dropna().astype(str) if x.strip() != ""]
 
         # 좋았던 점: X(23), Y(24)
@@ -210,23 +209,15 @@ if uploaded_file:
         if result is None:
             status_msg.error("❌ 데이터 구조 오류")
             st.warning("J열~AB열 확인 필요.")
-            st.dataframe(final_df.head(3))
         else:
             scores, total, t_good, t_bad, t_hope, count = result
-            
-            # [디버깅] 추출된 주관식 데이터 미리보기
-            with st.expander("🔍 추출된 주관식 답변 확인 (내용이 보여야 정상)"):
-                st.write(f"**좋았던 점 ({len(t_good)}건):**", t_good)
-                st.write(f"**개선할 점 ({len(t_bad)}건):**", t_bad)
-                st.write(f"**희망 주제 ({len(t_hope)}건):**", t_hope)
             
             score_summary = f"   - 전체 평균 만족도: {round(total, 2)}점\n   - 참여 인원: {count}명\n   - 세부 점수:\n"
             for k, v in scores.items():
                 val = round(v, 2) if pd.notnull(v) else 0
                 score_summary += f"     · {k}: {val}점\n"
 
-            with st.spinner("🤖 AI가 보고서를 작성하고 있습니다..."):
-                # 데이터를 줄바꿈 문자열로 변환 (AI 전달용)
+            with st.spinner("보고서를 작성하고 있습니다..."):
                 txt_good = "\n".join([f"- {x}" for x in t_good]) if t_good else "(없음)"
                 txt_bad = "\n".join([f"- {x}" for x in t_bad]) if t_bad else "(없음)"
                 txt_hope = "\n".join([f"- {x}" for x in t_hope]) if t_hope else "(없음)"
@@ -249,7 +240,7 @@ if uploaded_file:
                 2. 종합 제언은 구체적 대안 2~3가지 제시.
                 3. 말투는 '~함'체 사용.
                 
-                [구분자 (이대로 정확히 나눠줘)]
+                [구분자]
                 ###GOOD
                 (좋았던 점 내용)
                 ###BAD
@@ -263,9 +254,7 @@ if uploaded_file:
                 if MY_API_KEY:
                     ai_res = run_ai_analysis(prompt)
                     
-                    # [수정됨] 파싱 로직 개선 (### 구분자 사용)
                     parsed = {"GOOD":"", "BAD":"", "HOPE":"", "PLAN":""}
-                    # ###로 나누면 0번은 빈값, 1번부터 내용
                     parts = ai_res.split("###")
                     for p in parts:
                         p = p.strip()
@@ -276,10 +265,10 @@ if uploaded_file:
                     
                     final_report = FINAL_TEMPLATE.format(
                         정량_요약=score_summary,
-                        좋았던점_요약=parsed["GOOD"] if parsed["GOOD"] else "(내용 없음 - AI 응답 확인 필요)",
-                        개선점_요약=parsed["BAD"] if parsed["BAD"] else "(내용 없음 - AI 응답 확인 필요)",
-                        희망주제_요약=parsed["HOPE"] if parsed["HOPE"] else "(내용 없음 - AI 응답 확인 필요)",
-                        종합제언=parsed["PLAN"] if parsed["PLAN"] else "(내용 없음 - AI 응답 확인 필요)"
+                        좋았던점_요약=parsed["GOOD"] if parsed["GOOD"] else "(내용 없음)",
+                        개선점_요약=parsed["BAD"] if parsed["BAD"] else "(내용 없음)",
+                        희망주제_요약=parsed["HOPE"] if parsed["HOPE"] else "(내용 없음)",
+                        종합제언=parsed["PLAN"] if parsed["PLAN"] else "(내용 없음)"
                     )
                     
                     status_msg.empty()
@@ -289,7 +278,6 @@ if uploaded_file:
                     status_msg.warning("API 키가 없습니다.")
 
     elif pdf_text:
-        # PDF 로직 (### 구분자로 통일)
         with st.spinner("📄 AI가 PDF를 분석 중입니다..."):
             prompt = f"""
             교육 결과 보고서 전문가로서 아래 PDF 내용을 요약해줘.
