@@ -78,7 +78,7 @@ uploaded_file = st.file_uploader("여기를 클릭하여 파일을 선택하세�
 if uploaded_file:
     try:
         # header=1 로드
-        df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
+        df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
         # ----------------------------------------------------------------------
         # 4. 데이터 전처리 (적격자 필터링)
