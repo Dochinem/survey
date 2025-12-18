@@ -127,7 +127,7 @@ st.title("📊 교육 결과 대시보드")
 
 if uploaded_file is not None:
     # 데이터 로드
-    df = pd.read_excel(uploaded_file, sheet_name='all response')
+    df = pd.read_excel(uploaded_file, sheet_name='all responses')
     
     # -- [통계 계산] --
     total_count = len(df)
