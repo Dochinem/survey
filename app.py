@@ -4,60 +4,60 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import google.generativeai as genai
-import platform
 import io
 import os
 from matplotlib import font_manager, rc
 from fpdf import FPDF
 
 # --------------------------------------------------------------------------
-# 1. 기본 설정 (폰트 & API 키)
+# 1. 기본 설정
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# [중요] 한글 폰트 경로 설정 (윈도우 기준)
-font_path = "C:/Windows/Fonts/malgun.ttf"
+# 폰트 설정 (NanumGothic.ttf)
+font_filename = "NanumGothic.ttf"
 
-# 폰트 파일이 진짜 있는지 확인
-if not os.path.exists(font_path):
-    st.error(f"🚨 폰트 파일을 찾을 수 없습니다: {font_path}")
-    st.info("다른 폰트 경로를 확인하거나, 폰트 파일이 있는지 확인해주세요.")
+if not os.path.exists(font_filename):
+    st.error(f"Error: '{font_filename}' 파일을 찾을 수 없습니다.")
     st.stop()
 else:
-    # 1) Matplotlib(차트) 한글 설정
-    font_name = font_manager.FontProperties(fname=font_path).get_name()
-    rc('font', family=font_name)
-    mpl.rcParams['axes.unicode_minus'] = False # 마이너스 깨짐 방지
+    try:
+        font_manager.fontManager.addfont(font_filename)
+        font_prop = font_manager.FontProperties(fname=font_filename)
+        plt.rc('font', family=font_prop.get_name())
+    except Exception as e:
+        st.error(f"폰트 로드 오류: {e}")
+    
+    mpl.rcParams['axes.unicode_minus'] = False
 
 # API 키 설정
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
 else:
-    st.error("🚨 secrets.toml 파일에서 'GEMINI_API_KEY'를 찾지 못했습니다.")
+    st.error("Error: secrets.toml 파일에서 GEMINI_API_KEY를 찾을 수 없습니다.")
     st.stop()
 
 # --------------------------------------------------------------------------
-# 2. PDF 생성 함수 (fpdf2 + 한글 폰트 강제 적용)
+# 2. PDF 생성 함수 (fpdf2)
 # --------------------------------------------------------------------------
 def create_pdf_fpdf2(fig, chart_df, ai_text):
     pdf = FPDF()
     pdf.add_page()
     
-    # 2) PDF 한글 폰트 등록 (필수!)
-    # 'Malgun'이라는 이름으로 폰트 파일을 등록합니다.
-    pdf.add_font("Malgun", fname=font_path)
+    # 한글 폰트 등록
+    pdf.add_font("Nanum", fname=font_filename)
     
     # 제목
-    pdf.set_font("Malgun", size=20)
+    pdf.set_font("Nanum", size=20)
     pdf.cell(0, 15, "교육 만족도 분석 리포트", new_x="LMARGIN", new_y="NEXT", align='C')
     pdf.ln(10)
 
     # 점수표
-    pdf.set_font("Malgun", size=14)
+    pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[영역별 만족도 점수]", new_x="LMARGIN", new_y="NEXT")
     
-    pdf.set_font("Malgun", size=12)
+    pdf.set_font("Nanum", size=12)
     for index, row in chart_df.iterrows():
         text = f"- {row['영역']}: {row['점수']:.2f}점"
         pdf.cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
@@ -72,11 +72,10 @@ def create_pdf_fpdf2(fig, chart_df, ai_text):
     pdf.ln(10)
 
     # AI 분석 결과
-    pdf.set_font("Malgun", size=14)
+    pdf.set_font("Nanum", size=14)
     pdf.cell(0, 10, "[AI 주관식 분석 결과]", new_x="LMARGIN", new_y="NEXT")
     
-    pdf.set_font("Malgun", size=11)
-    # AI 텍스트 줄바꿈 처리
+    pdf.set_font("Nanum", size=11)
     pdf.multi_cell(0, 7, ai_text)
     
     return pdf.output(dest='S')
@@ -118,32 +117,31 @@ open_ended_cols = [
 ]
 
 # --------------------------------------------------------------------------
-# 4. 화면 구성
+# 4. 메인 화면 구성
 # --------------------------------------------------------------------------
-st.title("📊 교육 만족도 설문 통합 분석 리포트")
+st.title("교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
 
-st.markdown("### 📂 엑셀 파일 업로드 (Raw_data.xlsx)")
+st.markdown("### 엑셀 파일 업로드 (Raw_data.xlsx)")
 uploaded_file = st.file_uploader("파일 선택", type=['xlsx'], label_visibility="collapsed")
 
 if uploaded_file:
     try:
-        df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
+        # 시트 이름 all responses
+        df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
         if '답변 적격성' not in df.columns:
-            st.error("🚨 '답변 적격성' 컬럼이 없습니다.")
+            st.error("Error: '답변 적격성' 컬럼이 없습니다.")
             st.stop()
 
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
-        st.info(f"✅ **분석 대상(적격) 응답자:** 총 {valid_cnt}명")
+        st.info(f"분석 대상(적격) 응답자: 총 {valid_cnt}명")
         st.markdown("---")
 
-        # ----------------------------------------------------------------------
-        # 정량 분석
-        # ----------------------------------------------------------------------
-        st.subheader("1️⃣ 영역별 만족도 점수 (5점 만점)")
+        # 정량 분석 (이모지 제거됨)
+        st.subheader("1. 영역별 만족도 점수 (5점 만점)")
 
         all_score_cols = [col for cat in categories.values() for col in cat]
         df_valid[all_score_cols] = df_valid[all_score_cols].apply(pd.to_numeric, errors='coerce')
@@ -177,12 +175,10 @@ if uploaded_file:
 
         st.markdown("---")
 
-        # ----------------------------------------------------------------------
         # 정성 분석 (AI)
-        # ----------------------------------------------------------------------
-        st.subheader("2️⃣ 주관식 응답 심층 분석")
+        st.subheader("2. 주관식 응답 심층 분석")
         
-        if st.button("🚀 AI 분석 및 리포트 생성"):
+        if st.button("AI 분석 및 리포트 생성"):
             with st.spinner("AI가 분석 중입니다..."):
                 full_text = ""
                 for q in open_ended_cols:
@@ -198,16 +194,15 @@ if uploaded_file:
                     교육 전문가로서 아래 '적격' 응답자들의 주관식 답변을 분석해주세요.
                     
                     형식:
-                    1. 🌟 [핵심 강점]: 만족한 점 3가지
-                    2. 🔧 [개선 필요사항]: 개선 필요한 점 3가지
-                    3. 💡 [희망 교육 주제]: 요청된 주제들
-                    4. 📝 [종합 의견]: 한 줄 총평
+                    1. [핵심 강점]: 만족한 점 3가지
+                    2. [개선 필요사항]: 개선 필요한 점 3가지
+                    3. [희망 교육 주제]: 요청된 주제들
+                    4. [종합 의견]: 한 줄 총평
 
                     --- 데이터 ---
                     {full_text}
                     """
                     try:
-                        # 모델명 수정 (안정적인 버전)
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         ai_result_text = response.text
@@ -223,7 +218,7 @@ if uploaded_file:
                 try:
                     pdf_data = create_pdf_fpdf2(fig, chart_df, ai_result_text)
                     st.download_button(
-                        label="📥 PDF 리포트 다운로드",
+                        label="PDF 리포트 다운로드",
                         data=bytes(pdf_data),
                         file_name="교육만족도_결과보고서.pdf",
                         mime="application/pdf"
