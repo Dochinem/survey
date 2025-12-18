@@ -6,11 +6,11 @@ from fpdf import FPDF
 import os
 
 # -----------------------------------------------------------------------------
-# 1. 설문 구조 및 기본 설정
+# 1. 기본 설정 및 질문 정의
 # -----------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="교육 결과 분석 리포트")
+st.set_page_config(layout="wide", page_title="교육 결과 분석")
 
-# 객관식 질문 (점수화) - 띄어쓰기 등 정확해야 함
+# [중요] 엑셀의 질문과 띄어쓰기 하나라도 다르면 인식을 못합니다.
 category_config = {
     "교육 내용 및 구성": [
         "교육 내용이 현재 또는 향후 업무에 유용하다고 생각하십니까?",
@@ -36,7 +36,6 @@ category_config = {
     ]
 }
 
-# 주관식 질문 (서술형)
 essay_questions = [
     "이번 교육을 통해 얻은 것 중 가장 만족스럽거나 도움이 되었던 부분(강의, 실습, 자료 등)은 무엇이며, 그 이유는 무엇입니까?",
     "이번 교육을 다른 동료/지인에게 추천하고 싶다면, 그 이유는 무엇입니까?",
@@ -46,19 +45,16 @@ essay_questions = [
 ]
 
 # -----------------------------------------------------------------------------
-# 2. 기능 함수 정의
+# 2. 기능 함수 (AI 요약 / PDF)
 # -----------------------------------------------------------------------------
-
 def analyze_with_ai(api_key, text_data):
-    """AI를 사용하여 서술형 응답을 요약합니다."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"다음 교육 피드백을 분석해줘:\n{text_data}"
-        response = model.generate_content(prompt)
+        response = model.generate_content(f"다음 교육 설문 피드백을 요약해줘:\n{text_data}")
         return response.text
     except Exception as e:
-        return f"AI 분석 오류: {str(e)}"
+        return f"AI 오류: {str(e)}"
 
 def create_pdf(report_data, ai_summary):
     pdf = FPDF()
@@ -89,7 +85,6 @@ def create_pdf(report_data, ai_summary):
 # -----------------------------------------------------------------------------
 st.title("📊 교육 결과 대시보드")
 
-# Secrets에서 API Key 가져오기
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except:
@@ -98,25 +93,30 @@ except:
 uploaded_file = st.sidebar.file_uploader("엑셀 파일 업로드", type=['xlsx'])
 
 if uploaded_file is not None:
-    # 1. 시트 이름 상관없이 첫 번째 시트 읽기
+    # 1. 데이터 읽기
     df = pd.read_excel(uploaded_file, sheet_name=0)
-    
-    # [수정 1] 빈 줄(모든 값이 비어있는 행) 제거 -> 인원수 오류 해결
-    df = df.dropna(how='all')
-    
-    # [수정 2] 컬럼명 앞뒤 공백 제거 -> 매칭 오류 완화
-    df.columns = df.columns.str.strip()
 
-    # -- [통계 계산] --
+    # -------------------------------------------------------------------------
+    # [핵심 수정 1] 컬럼명 공백 제거 (매칭률 높이기)
+    # -------------------------------------------------------------------------
+    # 엑셀 헤더의 앞뒤 공백을 모두 없앱니다. (" 질문 " -> "질문")
+    df.columns = df.columns.astype(str).str.strip()
+
+    # -------------------------------------------------------------------------
+    # [핵심 수정 2] 유령 데이터(빈 줄) 강력 삭제
+    # -------------------------------------------------------------------------
+    # thresh=3: "적어도 데이터가 3개 이상 채워진 줄만 남겨라"
+    # (보통 타임스탬프+ID만 있는 줄은 데이터가 2개라 삭제됩니다)
+    df = df.dropna(thresh=3)
+    
+    # 인원수 재계산
     total_count = len(df)
+
+    # 매칭된 컬럼 찾기
+    all_targets = [q for cats in category_config.values() for q in cats]
+    found_cols = [col for col in df.columns if col in all_targets]
     
-    # 실제로 매칭된 컬럼만 찾기
-    found_cols = []
-    for cats in category_config.values():
-        for q in cats:
-            if q in df.columns:
-                found_cols.append(q)
-    
+    # 평균 계산
     if found_cols:
         total_avg = df[found_cols].mean(numeric_only=True).mean()
     else:
@@ -130,12 +130,12 @@ if uploaded_file is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    # 매칭된 컬럼이 하나도 없으면 경고 표시
-    if total_count > 0 and len(found_cols) == 0:
-        st.error("⚠️ 점수가 0점으로 나옵니다. 엑셀의 질문(헤더) 이름이 코드와 일치하지 않습니다.")
-        st.info("👇 화면 맨 아래 '엑셀 데이터 확인하기'를 눌러 실제 컬럼명을 확인해보세요.")
+    # 점수가 0점이면 경고
+    if total_count > 0 and total_avg == 0:
+        st.error("⚠️ 여전히 점수가 0점입니다. 엑셀의 질문 이름과 코드의 질문 이름이 다릅니다.")
+        st.info("👇 맨 아래 '엑셀 데이터 확인'을 열어서 컬럼 이름을 복사해 코드에 붙여넣으세요.")
 
-    # -- [객관식 상세] --
+    # 카테고리별 상세
     cols = st.columns(len(category_config))
     cat_scores = {}
 
@@ -145,7 +145,7 @@ if uploaded_file is not None:
             st.markdown("---")
             scores = []
             for q in questions:
-                # 공백 제거된 상태로 비교
+                # 공백 제거된 상태끼리 비교
                 if q.strip() in df.columns:
                     val = df[q.strip()].mean()
                     scores.append(val)
@@ -161,7 +161,7 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # -- [서술형 및 AI] --
+    # 서술형 및 AI
     st.header("📝 서술형 응답")
     
     all_essay_text = ""
@@ -173,7 +173,7 @@ if uploaded_file is not None:
                 all_essay_text += f"\n[질문: {q}]\n" + "\n".join(valid_texts)
 
     ai_result_text = ""
-    if api_key and st.button("분석 실행"):
+    if api_key and st.button("🤖 AI 분석 실행"):
         if all_essay_text:
             with st.spinner("분석 중..."):
                 ai_result_text = analyze_with_ai(api_key, all_essay_text)
@@ -182,23 +182,19 @@ if uploaded_file is not None:
         else:
             st.warning("분석할 텍스트가 없습니다.")
 
-    # 서술형 원본 보기
     for q in essay_questions:
         q_clean = q.strip()
         with st.expander(f"Q. {q}"):
             if q_clean in df.columns:
                 st.dataframe(df[[q_clean]].fillna(""), use_container_width=True)
             else:
-                st.caption("데이터 없음 (컬럼명 불일치)")
+                st.caption("데이터 없음")
 
-    # -- [디버깅 도구: 엑셀 헤더 확인용] --
+    # [디버깅] 엑셀 헤더 확인
     st.markdown("---")
-    with st.expander("🔍 엑셀 데이터 확인하기 (점수가 안 나올 때 클릭)"):
-        st.write("엑셀 파일이 인식한 헤더 이름 목록입니다. 코드의 질문 내용과 똑같은지 비교해보세요.")
-        st.write(df.columns.tolist())
-        st.write("---")
-        st.write("엑셀 데이터 미리보기:")
-        st.dataframe(df.head())
+    with st.expander("🔍 엑셀 데이터 확인하기 (점수 0점일 때 클릭)"):
+        st.write("현재 엑셀에서 인식된 컬럼명 목록입니다. 아래 이름을 복사해서 코드의 category_config를 수정하세요.")
+        st.code(df.columns.tolist()) # 리스트 형태로 복사하기 쉽게 보여줌
 
     # PDF 다운로드
     if os.path.exists('NanumGothic.ttf') and st.button("PDF 다운로드"):
