@@ -16,12 +16,23 @@ else:
     mpl.rc('font', family='AppleGothic') 
 mpl.rcParams['axes.unicode_minus'] = False
 
-# API 키 로드 (secrets.toml)
+# [수정됨] API 키 로드 및 설정 (에러 원인 명확히 분리)
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+    # 1. secrets에서 키 가져오기 (키가 없으면 여기서 에러 발생)
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    else:
+        st.error("❌ secrets에 'GOOGLE_API_KEY'가 없습니다. 스펠링을 확인해주세요.")
+        st.stop()
+        
+    # 2. 가져온 키로 설정하기
     genai.configure(api_key=api_key)
-except Exception:
-    st.error("❌ secrets.toml 파일에 'GOOGLE_API_KEY'가 없습니다. 설정을 확인해주세요.")
+
+except FileNotFoundError:
+    st.error("❌ .streamlit/secrets.toml 파일을 찾을 수 없습니다.")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ 설정 중 오류 발생: {e}")
     st.stop()
 
 # --------------------------------------------------------------------------
