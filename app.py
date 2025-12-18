@@ -14,7 +14,6 @@ from fpdf import FPDF
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# 폰트 설정 (NanumGothic.ttf)
 font_filename = "NanumGothic.ttf"
 
 if not os.path.exists(font_filename):
@@ -27,7 +26,6 @@ else:
         plt.rc('font', family=font_prop.get_name())
     except Exception as e:
         st.error(f"폰트 로드 오류: {e}")
-    
     mpl.rcParams['axes.unicode_minus'] = False
 
 # API 키 설정
@@ -156,14 +154,25 @@ if uploaded_file:
         ax.tick_params(axis='both', labelsize=8)
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        # [수정] 표의 시인성을 위해 컬럼 너비 조정 및 폰트 강조
         col_chart, col_data = st.columns([1, 1]) 
         with col_chart:
             st.pyplot(fig)
         with col_data:
             st.markdown("#### **상세 점수표**")
-            # 데이터프레임 스타일 적용: 폰트 크기 및 높이 조정
-            st.table(chart_df.assign(점수=chart_df['점수'].map('{:.2f}'.format)))
+            # [수정] HTML을 사용하여 표 글씨 크기를 강제로 키움
+            html_table = f"""
+            <style>
+            .big-font {{ font-size:20px !important; font-weight: bold; text-align: center; }}
+            table {{ width: 100%; border-collapse: collapse; }}
+            th {{ background-color: #f0f2f6; font-size: 18px; padding: 10px; border: 1px solid #ddd; }}
+            td {{ font-size: 22px; padding: 15px; border: 1px solid #ddd; text-align: center; }}
+            </style>
+            <table>
+                <tr><th>영역</th><th>점수</th></tr>
+                {''.join([f"<tr><td>{row['영역']}</td><td>{row['점수']:.2f}</td></tr>" for _, row in chart_df.iterrows()])}
+            </table>
+            """
+            st.markdown(html_table, unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -191,17 +200,17 @@ if uploaded_file:
                     --- 데이터 ---
                     {full_text}
                     """
+                    # [수정] 모델 이름을 가장 기본 이름으로 설정하여 호환성 극대화
                     try:
-                        # [수정] 모델 호출 에러 방지용 호환성 코드
-                        # 최신 라이브러리가 아닐 경우를 대비해 'models/' 접두사를 명시하거나 기본 모델 사용
-                        model = genai.GenerativeModel('models/gemini-1.5-flash')
+                        model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         ai_result_text = response.text
                         st.success("분석 완료!")
                         st.markdown(ai_result_text)
                     except Exception as e:
-                        # 만약 models/ 접두사로도 안되면 일반 이름으로 재시도
+                        st.warning(f"최신 모델 시도 실패, 대체 모델로 시도합니다.")
                         try:
+                            # 404 에러 시 models/ 접두사 없이 다시 시도
                             model = genai.GenerativeModel('gemini-pro')
                             response = model.generate_content(prompt)
                             ai_result_text = response.text
