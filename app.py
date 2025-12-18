@@ -9,36 +9,27 @@ import google.generativeai as genai
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# 한글 폰트 설정 (Windows/Mac 대응)
+# 한글 폰트 설정
 if 'Windows' in plt.get_backend():
     mpl.rc('font', family='Malgun Gothic')
 else:
     mpl.rc('font', family='AppleGothic') 
 mpl.rcParams['axes.unicode_minus'] = False
 
-# [수정됨] API 키 로드 및 설정 (에러 원인 명확히 분리)
-try:
-    # 1. secrets에서 키 가져오기 (키가 없으면 여기서 에러 발생)
-    if "GOOGLE_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-    else:
-        st.error("❌ secrets에 'GOOGLE_API_KEY'가 없습니다. 스펠링을 확인해주세요.")
-        st.stop()
-        
-    # 2. 가져온 키로 설정하기
+# [수정] 불필요한 try-except 제거. Streamlit의 기본 기능에 맡김.
+# secrets.toml 파일에 [GOOGLE_API_KEY]가 있다면 바로 불러옵니다.
+if "GOOGLE_API_KEY" in st.secrets:
+    api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-
-except FileNotFoundError:
-    st.error("❌ .streamlit/secrets.toml 파일을 찾을 수 없습니다.")
-    st.stop()
-except Exception as e:
-    st.error(f"❌ 설정 중 오류 발생: {e}")
+else:
+    # 키가 없을 경우에만 에러 메시지 표시
+    st.error("🚨 'secrets.toml' 파일에서 'GOOGLE_API_KEY'를 찾지 못했습니다.")
+    st.info("Tip: .streamlit/secrets.toml 파일 안에 `GOOGLE_API_KEY = '...'` 형태로 저장되어 있는지 확인해주세요.")
     st.stop()
 
 # --------------------------------------------------------------------------
-# 2. 분석할 문항 정의 (사용자가 확인해준 컬럼명 적용)
+# 2. 분석할 문항 정의
 # --------------------------------------------------------------------------
-# 카테고리별 문항 묶기 (점수 계산용)
 categories = {
     "교육 내용 만족도": [
         '교육 내용이 현재 또는 향후 업무에 유용하다고 생각하십니까?',
@@ -64,7 +55,6 @@ categories = {
     ]
 }
 
-# 주관식 문항 (AI 분석용)
 open_ended_cols = [
     '이번 교육을 통해 얻은 것 중 가장 만족스럽거나 도움이 되었던 부분(강의, 실습, 자료 등)은 무엇이며, 그 이유는 무엇입니까?',
     '이번 교육을 다른 동료/지인에게 추천하고 싶다면, 그 이유는 무엇입니까?',
@@ -83,7 +73,7 @@ uploaded_file = st.file_uploader("엑셀 파일 업로드 (Raw_data.xlsx)", type
 
 if uploaded_file:
     try:
-        # header=1 로드 (2번째 줄 컬럼 인식)
+        # header=1 로드
         df = pd.read_excel(uploaded_file, sheet_name='all response', header=1)
 
         # ----------------------------------------------------------------------
@@ -94,11 +84,9 @@ if uploaded_file:
             st.stop()
 
         total_cnt = len(df)
-        # 공백 제거 후 '적격'만 필터링
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
-        # 상단 지표 표시
         c1, c2, c3 = st.columns(3)
         c1.metric("전체 응답자", f"{total_cnt}명")
         c2.metric("유효(적격) 응답자", f"{valid_cnt}명")
@@ -111,34 +99,27 @@ if uploaded_file:
         # ----------------------------------------------------------------------
         st.subheader("1️⃣ 영역별 만족도 점수 (5점 만점)")
 
-        # 모든 점수 문항을 숫자로 변환 (문자 섞여있으면 NaN 처리)
         all_score_cols = [col for cat in categories.values() for col in cat]
         df_valid[all_score_cols] = df_valid[all_score_cols].apply(pd.to_numeric, errors='coerce')
 
-        # 카테고리별 평균 계산
         category_means = {}
         for cat_name, cols in categories.items():
-            # 행별 평균 -> 전체 평균
             avg_score = df_valid[cols].mean().mean()
             category_means[cat_name] = round(avg_score, 2)
 
-        # 데이터프레임 변환 for 차트
         chart_df = pd.DataFrame(list(category_means.items()), columns=['영역', '점수'])
         
-        # 그래프 그리기 (Matplotlib)
         fig, ax = plt.subplots(figsize=(10, 4))
         bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2')
         
-        # 막대 위에 점수 표시
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height}', ha='center', va='bottom', fontsize=12, fontweight='bold')
             
-        ax.set_ylim(0, 5.5) # 5점 만점 기준
+        ax.set_ylim(0, 5.5)
         ax.set_ylabel("점수 (5점 만점)")
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        # 스트림릿에 그래프 표시
         col_chart, col_data = st.columns([2, 1])
         with col_chart:
             st.pyplot(fig)
@@ -156,7 +137,6 @@ if uploaded_file:
         if st.button("🚀분석 실행하기 (클릭)"):
             with st.spinner("주관식 답변을 읽고 분석 중입니다..."):
                 
-                # AI에게 보낼 텍스트 취합
                 full_text = ""
                 for q in open_ended_cols:
                     if q in df_valid.columns:
@@ -168,29 +148,23 @@ if uploaded_file:
                 if not full_text:
                     st.warning("분석할 주관식 답변 데이터가 없습니다.")
                 else:
-                    # 프롬프트 설정
                     prompt = f"""
-                    당신은 교육 전문가이자 데이터 분석가입니다.
-                    아래 데이터는 설문조사에서 '적격' 판정을 받은 교육생들의 주관식 응답입니다.
+                    당신은 교육 전문가입니다. 아래 '적격' 응답자들의 주관식 답변을 분석해주세요.
                     
-                    다음 형식으로 명확한 요약 보고서를 작성해주세요:
-                    1. 🌟 [핵심 강점]: 참가자들이 가장 만족한 3가지 (구체적 이유 포함)
-                    2. 🔧 [개선 필요사항]: 불만이나 개선이 필요한 3가지 (시설, 내용 등 구분)
-                    3. 💡 [희망 교육 주제]: 향후 요청된 교육 주제 리스트
-                    4. 📝 [종합 의견]: 전체 교육에 대한 총평 (한 문장)
+                    형식:
+                    1. 🌟 [핵심 강점]: 참가자들이 만족한 점 3가지 (구체적 이유)
+                    2. 🔧 [개선 필요사항]: 불만이나 개선이 필요한 점 3가지
+                    3. 💡 [희망 교육 주제]: 요청된 주제 리스트
+                    4. 📝 [종합 의견]: 한 줄 총평
 
-                    --- 설문 데이터 ---
+                    --- 데이터 ---
                     {full_text}
                     """
                     
-                    # AI 호출
-                    try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        response = model.generate_content(prompt)
-                        st.success("분석 완료!")
-                        st.markdown(response.text)
-                    except Exception as e:
-                        st.error(f"AI 분석 실패: {e}")
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(prompt)
+                    st.success("분석 완료!")
+                    st.markdown(response.text)
 
     except Exception as e:
         st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
