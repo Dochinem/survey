@@ -143,11 +143,11 @@ def calculate_metrics(df):
         # 좋았던 점: X(23), Y(24)
         t_good = get_clean_text_list([df.iloc[:, 23], df.iloc[:, 24]])
         
-        # 개선할 점: Z(25), AB(27)
-        t_bad = get_clean_text_list([df.iloc[:, 25], df.iloc[:, 27]])
+        # 개선할 점: Z(25), AA(26)
+        t_bad = get_clean_text_list([df.iloc[:, 25], df.iloc[:, 26]])
         
-        # 희망 주제: AA(26)
-        t_hope = get_clean_text_list([df.iloc[:, 26]])
+        # 희망 주제: AB(27)
+        t_hope = get_clean_text_list([df.iloc[:, 27]])
         
         return scores, total, t_good, t_bad, t_hope, len(df)
     except Exception:
