@@ -11,30 +11,27 @@ from matplotlib import font_manager, rc
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
-# [수정됨] 한글 폰트 강제 설정 (Windows/Mac 명확히 구분)
+# 한글 폰트 설정
 try:
     if platform.system() == 'Windows':
-        # 윈도우의 경우 폰트 경로를 직접 지정하여 확실하게 로드
         font_path = "c:/Windows/Fonts/malgun.ttf"
         font_name = font_manager.FontProperties(fname=font_path).get_name()
         rc('font', family=font_name)
     elif platform.system() == 'Darwin': # Mac
         rc('font', family='AppleGothic')
     else:
-        # 리눅스/코랩 등 (나눔고딕 시도)
         rc('font', family='NanumGothic')
 except Exception:
     pass
 
 mpl.rcParams['axes.unicode_minus'] = False
 
-# [확인됨] secrets.toml에 적힌 이름(GEMINI_API_KEY)으로 키를 찾도록 변경
+# API 키 설정
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
 else:
     st.error("🚨 secrets.toml 파일에서 'GEMINI_API_KEY'를 찾지 못했습니다.")
-    st.info("secrets.toml 파일 안에 `GEMINI_API_KEY = '...'` 라고 적혀 있는지 확인해주세요.")
     st.stop()
 
 # --------------------------------------------------------------------------
@@ -93,14 +90,12 @@ if uploaded_file:
             st.error("🚨 '답변 적격성' 컬럼을 찾을 수 없습니다. 엑셀 형식을 확인하세요.")
             st.stop()
 
-        total_cnt = len(df)
+        # 공백 제거 후 '적격'만 필터링
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("전체 응답자", f"{total_cnt}명")
-        c2.metric("유효(적격) 응답자", f"{valid_cnt}명")
-        c3.metric("필터링 제외", f"{total_cnt - valid_cnt}명")
+        # [수정됨] 전체 숫자는 빼고, 유효 응답자만 깔끔하게 표시
+        st.info(f"✅ **분석 대상 응답자:** 총 {valid_cnt}명")
         
         st.markdown("---")
 
@@ -119,23 +114,25 @@ if uploaded_file:
 
         chart_df = pd.DataFrame(list(category_means.items()), columns=['영역', '점수'])
         
-        fig, ax = plt.subplots(figsize=(10, 4))
-        bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2')
+        # [수정됨] figsize=(5, 3)으로 사이즈 대폭 축소
+        fig, ax = plt.subplots(figsize=(5, 3))
+        bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2', width=0.5)
         
         for bar in bars:
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+            ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height}', ha='center', va='bottom', fontsize=10, fontweight='bold')
             
         ax.set_ylim(0, 5.5)
-        ax.set_ylabel("점수 (5점 만점)")
+        ax.set_ylabel("점수", fontsize=9)
+        ax.tick_params(axis='both', labelsize=9)
         ax.grid(axis='y', linestyle='--', alpha=0.5)
         
-        col_chart, col_data = st.columns([2, 1])
+        col_chart, col_data = st.columns([1, 1]) # 비율 조정
         with col_chart:
             st.pyplot(fig)
         with col_data:
             st.write("#### 상세 점수")
-            st.dataframe(chart_df)
+            st.dataframe(chart_df, hide_index=True)
 
         st.markdown("---")
 
@@ -171,10 +168,14 @@ if uploaded_file:
                     {full_text}
                     """
                     
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    response = model.generate_content(prompt)
-                    st.success("분석 완료!")
-                    st.markdown(response.text)
+                    # [수정됨] 모델명을 'gemini-pro'로 변경 (가장 안정적)
+                    try:
+                        model = genai.GenerativeModel('gemini-pro')
+                        response = model.generate_content(prompt)
+                        st.success("분석 완료!")
+                        st.markdown(response.text)
+                    except Exception as e:
+                        st.error(f"AI 분석 오류: {e}")
 
     except Exception as e:
         st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
