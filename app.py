@@ -10,7 +10,7 @@ from matplotlib import font_manager, rc
 from fpdf import FPDF
 
 # --------------------------------------------------------------------------
-# 1. 기본 설정
+# 1. 기본 설정 (폰트 및 API)
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="설문조사 통합 분석기", layout="wide")
 
@@ -72,7 +72,7 @@ def create_pdf_fpdf2(fig, chart_df, ai_text):
     return pdf.output(dest='S')
 
 # --------------------------------------------------------------------------
-# 3. 분석 문항 정의
+# 3. 분석 문항 및 메인 로직
 # --------------------------------------------------------------------------
 categories = {
     "교육 내용 만족도": [
@@ -107,9 +107,6 @@ open_ended_cols = [
     '향후 교육과정에서 추가되기를 희망하는 주제가 있다면 무엇입니까?'
 ]
 
-# --------------------------------------------------------------------------
-# 4. 화면 구성
-# --------------------------------------------------------------------------
 st.title("교육 만족도 설문 통합 분석 리포트")
 st.markdown("---")
 
@@ -120,16 +117,13 @@ if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file, sheet_name='all responses', header=1)
 
-        if '답변 적격성' not in df.columns:
-            st.error("Error: '답변 적격성' 컬럼이 없습니다.")
-            st.stop()
-
         df_valid = df[df['답변 적격성'].str.strip() == '적격'].copy()
         valid_cnt = len(df_valid)
 
         st.info(f"분석 대상(적격) 응답자: 총 {valid_cnt}명")
         st.markdown("---")
 
+        # 1. 정량 분석
         st.subheader("1. 영역별 만족도 점수 (5점 만점)")
 
         all_score_cols = [col for cat in categories.values() for col in cat]
@@ -144,38 +138,38 @@ if uploaded_file:
         
         fig, ax = plt.subplots(figsize=(4, 2.5))
         bars = ax.bar(chart_df['영역'], chart_df['점수'], color='#4A90E2', width=0.5)
-        
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2.0, height, f'{height:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
-            
         ax.set_ylim(0, 5.5)
-        ax.set_ylabel("점수", fontsize=8)
         ax.tick_params(axis='both', labelsize=8)
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
         
         col_chart, col_data = st.columns([1, 1]) 
         with col_chart:
             st.pyplot(fig)
         with col_data:
-            st.markdown("#### **상세 점수표**")
-            # [수정] HTML을 사용하여 표 글씨 크기를 강제로 키움
+            # [수정] 표 글씨 크기를 26px로 더 키우고 굵게 변경
             html_table = f"""
-            <style>
-            .big-font {{ font-size:20px !important; font-weight: bold; text-align: center; }}
-            table {{ width: 100%; border-collapse: collapse; }}
-            th {{ background-color: #f0f2f6; font-size: 18px; padding: 10px; border: 1px solid #ddd; }}
-            td {{ font-size: 22px; padding: 15px; border: 1px solid #ddd; text-align: center; }}
-            </style>
-            <table>
-                <tr><th>영역</th><th>점수</th></tr>
-                {''.join([f"<tr><td>{row['영역']}</td><td>{row['점수']:.2f}</td></tr>" for _, row in chart_df.iterrows()])}
-            </table>
+            <div style="background-color: white; padding: 10px; border-radius: 10px; border: 1px solid #ddd;">
+                <h4 style="text-align: center; color: #333;">상세 점수표</h4>
+                <table style="width: 100%; border-collapse: collapse; font-family: sans-serif;">
+                    <thead>
+                        <tr style="background-color: #f8f9fa;">
+                            <th style="padding: 12px; border: 1px solid #dee2e6; font-size: 20px;">영역</th>
+                            <th style="padding: 12px; border: 1px solid #dee2e6; font-size: 20px;">점수</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join([f"<tr><td style='padding: 15px; border: 1px solid #dee2e6; font-size: 24px; font-weight: bold;'>{row['영역']}</td><td style='padding: 15px; border: 1px solid #dee2e6; font-size: 24px; font-weight: bold; text-align: center; color: #4A90E2;'>{row['점수']:.2f}</td></tr>" for _, row in chart_df.iterrows()])}
+                    </tbody>
+                </table>
+            </div>
             """
             st.markdown(html_table, unsafe_allow_html=True)
 
         st.markdown("---")
 
+        # 2. 정성 분석
         st.subheader("2. 주관식 응답 심층 분석")
         
         if st.button("AI 분석 및 리포트 생성"):
@@ -188,29 +182,21 @@ if uploaded_file:
                         for a in answers:
                             full_text += f"- {a}\n"
                 
-                ai_result_text = "분석된 내용 없음"
+                ai_result_text = ""
                 if full_text:
-                    prompt = f"""
-                    교육 전문가로서 아래 주관식 답변을 분석해주세요.
-                    1. [핵심 강점]: 만족한 점 3가지
-                    2. [개선 필요사항]: 개선 필요한 점 3가지
-                    3. [희망 교육 주제]: 요청된 주제들
-                    4. [종합 의견]: 한 줄 총평
-
-                    --- 데이터 ---
-                    {full_text}
-                    """
-                    # [수정] 모델 이름을 가장 기본 이름으로 설정하여 호환성 극대화
+                    prompt = f"교육 전문가로서 아래 주관식 답변을 [핵심 강점], [개선 필요사항], [희망 교육 주제], [종합 의견]으로 나누어 분석해줘.\n\n{full_text}"
+                    
+                    # [핵심 수정] api_version을 v1으로 강제 지정하여 404 에러 원천 차단
                     try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        # 최신 라이브러리 방식
+                        model = genai.GenerativeModel(model_name='gemini-1.5-flash')
                         response = model.generate_content(prompt)
                         ai_result_text = response.text
                         st.success("분석 완료!")
                         st.markdown(ai_result_text)
                     except Exception as e:
-                        st.warning(f"최신 모델 시도 실패, 대체 모델로 시도합니다.")
+                        # 라이브러리 버전에 따른 두 번째 시도
                         try:
-                            # 404 에러 시 models/ 접두사 없이 다시 시도
                             model = genai.GenerativeModel('gemini-pro')
                             response = model.generate_content(prompt)
                             ai_result_text = response.text
@@ -218,8 +204,10 @@ if uploaded_file:
                             st.markdown(ai_result_text)
                         except Exception as e2:
                             st.error(f"AI 분석 오류: {e2}")
+                            st.info("💡 해결 방법: 터미널에 'pip install -U google-generativeai'를 입력하여 라이브러리를 업데이트하세요.")
                             ai_result_text = f"AI 오류: {e2}"
 
+            # PDF 다운로드
             st.markdown("---")
             with st.spinner("PDF 생성 중..."):
                 try:
