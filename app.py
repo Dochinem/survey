@@ -16,15 +16,13 @@ else:
     mpl.rc('font', family='AppleGothic') 
 mpl.rcParams['axes.unicode_minus'] = False
 
-# [수정] 불필요한 try-except 제거. Streamlit의 기본 기능에 맡김.
-# secrets.toml 파일에 [GOOGLE_API_KEY]가 있다면 바로 불러옵니다.
-if "GOOGLE_API_KEY" in st.secrets:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+# [수정됨] 설정하신 이름(GEMINI_API_KEY)으로 키를 찾도록 변경
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
 else:
-    # 키가 없을 경우에만 에러 메시지 표시
-    st.error("🚨 'secrets.toml' 파일에서 'GOOGLE_API_KEY'를 찾지 못했습니다.")
-    st.info("Tip: .streamlit/secrets.toml 파일 안에 `GOOGLE_API_KEY = '...'` 형태로 저장되어 있는지 확인해주세요.")
+    st.error("🚨 secrets.toml 파일에서 'GEMINI_API_KEY'를 찾을 수 없습니다.")
+    st.info("Tip: .streamlit/secrets.toml 파일 안에 변수명이 정확히 'GEMINI_API_KEY'인지 확인해주세요.")
     st.stop()
 
 # --------------------------------------------------------------------------
